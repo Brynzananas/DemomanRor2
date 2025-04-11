@@ -44,7 +44,6 @@ using static MonoMod.InlineRT.MonoModRule;
 using EntityStates.VoidRaidCrab.Leg;
 using UnityEngine.Bindings;
 using System.Security;
-using LoadoutSkillTitles;
 using MonoMod.Cil;
 using Mono.Cecil.Cil;
 using static R2API.SoundAPI.Music.CustomMusicTrackDef;
@@ -59,7 +58,6 @@ namespace DemomanRor2
 {
     [BepInPlugin(ModGuid, ModName, ModVer)]
     [BepInDependency(R2API.R2API.PluginGUID, R2API.R2API.PluginVersion)]
-    [BepInDependency("com.TheTimeSweeper.LoadoutSkillTitles")]
     [BepInDependency("com.weliveinasociety.CustomEmotesAPI", BepInDependency.DependencyFlags.SoftDependency)]
     [NetworkCompatibility(CompatibilityLevel.EveryoneMustHaveMod, VersionStrictness.EveryoneNeedSameModVersion)]
     //[R2APISubmoduleDependency(nameof(CommandHelper))]
@@ -232,7 +230,7 @@ namespace DemomanRor2
             {
                 if (skillDef == HeavyShieldSkillDef)
                 {
-                    arg2.armorAdd += 15;
+                    arg2.armorAdd += 15f;
                 }
                 if (skillDef == SkullcutterSkillDef)
                 {
@@ -242,8 +240,14 @@ namespace DemomanRor2
                     }
                     else
                     {
-                        arg2.baseMoveSpeedAdd -= 2;
+                        arg2.baseMoveSpeedAdd -= 2f;
                     }
+                }
+                if (skillDef == EyelanderSkillDef)
+                {
+                    arg2.healthMultAdd -= 0.25f;
+                    arg2.baseMoveSpeedAdd -= 1f;
+                    arg2.damageMultAdd -= 0.25f;
                 }
             }
             EntityState entityState = arg3.stateMachine ? arg3.stateMachine.state : null;
@@ -455,6 +459,7 @@ namespace DemomanRor2
             orig(self);
             if (self.body.HasBuff(VelocityPreserve))
             {
+                self.disableAirControlUntilCollision = true;
                 InputBankTest inputBankTest = self.body.inputBank;
                 if (inputBankTest)
                 {
@@ -535,7 +540,7 @@ namespace DemomanRor2
         private void HealthComponent_TakeDamageProcess(On.RoR2.HealthComponent.orig_TakeDamageProcess orig, HealthComponent self, DamageInfo damageInfo)
         {
             CharacterBody characterBody = damageInfo.attacker ? damageInfo.attacker.GetComponent<CharacterBody>() : null;
-            if (characterBody && characterBody.HasBuff(ExtraSwordDamage)) damageInfo.damage *= characterBody.GetBuffCount(ExtraSwordDamage) / 100;
+            if (characterBody && characterBody.HasBuff(ExtraSwordDamage) && damageInfo.damageType.damageSource == DamageSource.Primary) damageInfo.damage *= 1 +( characterBody.GetBuffCount(ExtraSwordDamage) / 100);
             orig(self, damageInfo);
         }
 
@@ -543,6 +548,11 @@ namespace DemomanRor2
         {
             CharacterBody attackerBody = damageReport.attackerBody;
             bool validForUpgrade = self && (self.isChampion || self.isBoss) ? self.HasBuff(UpgradeOnKill) : false;
+            Debug.Log("valid: " + validForUpgrade);
+            Debug.Log(self);
+            Debug.Log(self?.isChampion);
+            Debug.Log(self?.isBoss);
+            Debug.Log(self.HasBuff(UpgradeOnKill));
             bool victimZatoichi = self.HasBuff(HealOnKill);
             bool attackerZatoichi = attackerBody ? attackerBody.HasBuff(HealOnKill) : false;
             orig(self, damageReport);
@@ -553,7 +563,7 @@ namespace DemomanRor2
             if (victimZatoichi && attackerZatoichi)
             {
                 HealthComponent healthComponent = attackerBody.healthComponent;
-                Overheal(healthComponent, 0.5f);
+                Overheal(healthComponent, 0.3f);
             }
 
         }
@@ -747,7 +757,8 @@ namespace DemomanRor2
         public static DemoSoundClass DemoCannonChargeSound = new DemoSoundClass("loose_cannon_charge");
         public static DemoSoundClass DemoCannonShootSound = new DemoSoundClass("loose_cannon_shoot");
         public static DemoSoundClass DemoCannonShootCritSound = new DemoSoundClass("loose_cannon_shootcrit");
-        public static DemoSoundClass DemoStickyDetonationSound = new DemoSoundClass("stickybomblauncher_charge_up");
+        public static DemoSoundClass DemoStickyDetonationSound = new DemoSoundClass("stickybomblauncher_det");
+        public static DemoSoundClass DemoStickyChargeSound = new DemoSoundClass("stickybomblauncher_charge_up");
         public static DemoSoundClass DemoStickyReloadSound = new DemoSoundClass("stickybomblauncher_worldreload");
         public static DemoSoundClass DemoTackyShootSound = new DemoSoundClass("tacky_grenadier_shoot");
         public static DemoSoundClass DemoTackyShootCritSound = new DemoSoundClass("tacky_grenadier_shoot_crit");
@@ -983,14 +994,17 @@ namespace DemomanRor2
         {
             private TeamFilter filter;
             private ProjectileExplosion projectileExplosion;
+            private StickyComponent stickyComponent;
             private void Start()
             {
                 filter = GetComponent<TeamFilter>();
+                stickyComponent = GetComponent<StickyComponent>();
             }
             private void OnTriggerEnter(Collider other)
             {
                 HurtBox hurtBox = other.GetComponent<HurtBox>();
-                if (filter && hurtBox && filter.teamIndex != hurtBox.healthComponent.body.teamComponent.teamIndex)
+                
+                if (stickyComponent ? !stickyComponent.sticked : true && filter && hurtBox && filter.teamIndex != hurtBox.healthComponent.body.teamComponent.teamIndex)
                 {
                     transform.position = other.ClosestPoint(transform.position);
                 }
@@ -1205,6 +1219,7 @@ namespace DemomanRor2
             //private Vector3 hookAimDirection;
             private GameObject hookedRotator;
             private GameObject hookedObject;
+            private SkillLocator skillLocator;
             //private float maxDistance = 32f;
             private float speed = 24f;
             public void Start()
@@ -1222,6 +1237,7 @@ namespace DemomanRor2
                 }
                 rigidbody = GetComponent<Rigidbody>();
                 owner = GetComponent<ProjectileController>().owner;
+                skillLocator = owner?.GetComponent<SkillLocator>();
 
                 if (ropeEnd)
                 {
@@ -1230,25 +1246,28 @@ namespace DemomanRor2
                 characterMotor = owner ? owner.GetComponent<CharacterMotor>() : null;
                 inputBankTest = owner ? owner.GetComponent<InputBankTest>() : null;
 
-                stateType = seekerState.stateType;
-                EntityStateMachine[] entityStateMachines = owner.GetComponents<EntityStateMachine>();
-                foreach (var stateMachine in entityStateMachines)
+                //stateType = seekerState.stateType;
+                if (skillLocator)
                 {
-                    if (stateMachine.state.GetType() == stateType)
+                    foreach (var stateMachine in skillLocator.allSkills)
                     {
-                        currentStateMachine = stateMachine;
-                        break;
+                        if (stateMachine.stateMachine && stateMachine.stateMachine.state != null && stateMachine.stateMachine.state.GetType() == seekerState.stateType)
+                        {
+                            currentStateMachine = stateMachine.stateMachine;
+                            break;
+                        }
+                    }
+                    if (currentStateMachine)
+                    {
+
+                    }
+                    else
+                    {
+                        Destroy(this);
+                        return;
                     }
                 }
-                if (currentStateMachine)
-                {
-
-                }
-                else
-                {
-                    Destroy(this);
-                    return;
-                }
+                
             }
             public void FixedUpdate()
             {
@@ -1788,38 +1807,42 @@ namespace DemomanRor2
             public GameObject owner;
             private EntityState stateType;
             private ProjectileDamage projectileDamage;
+            private SkillLocator skillLocator;
             public void Start()
             {
                 projectileDamage = GetComponent<ProjectileDamage>();
                 rigidbody = GetComponent<Rigidbody>();
                 owner = GetComponent<ProjectileController>().owner;
-                //EntityStateMachine[] entityStateMachines = owner.GetComponents<EntityStateMachine>();
-                //foreach (var stateMachine in entityStateMachines)
-                //{
-                //    if (stateMachine.state.GetType() == seekerState.stateType)
-                //    {
-                //        currentStateMachine = stateMachine;
-                //        stateType = currentStateMachine.state;
-                //        break;
-                //    }
-                //}
-                //if (currentStateMachine && stateType != null)
-                //{
-                //    if (stateType is BombLauncher)
-                //    {
-                //        BombLauncher bombLauncher = (stateType as BombLauncher);
-                //        ProjectileImpactExplosion projectileImpactExplosion = GetComponent<ProjectileImpactExplosion>();
-                //        if (projectileImpactExplosion)
-                //        {
-                //            projectileImpactExplosion.lifetime = projectileImpactExplosion.lifetime * (1 - (bombLauncher.charge / bombLauncher.chargeCap));
-                //        }
-                //    }
-                //}
-                //else
-                //{
-                //    Destroy(this);
-                //    return;
-                //}
+                skillLocator = owner?.GetComponent<SkillLocator>();
+                if (skillLocator)
+                {
+                    foreach (var stateMachine in skillLocator.allSkills)
+                    {
+                        if (stateMachine.stateMachine && stateMachine.stateMachine.state != null && stateMachine.stateMachine.state.GetType() == seekerState.stateType)
+                        {
+                            currentStateMachine = stateMachine.stateMachine;
+                            stateType = currentStateMachine.state;
+                            break;
+                        }
+                    }
+                    if (currentStateMachine && stateType != null)
+                    {
+                        if (stateType is BombLauncher)
+                        {
+                            BombLauncher bombLauncher = (stateType as BombLauncher);
+                            ProjectileImpactExplosion projectileImpactExplosion = GetComponent<ProjectileImpactExplosion>();
+                            if (projectileImpactExplosion)
+                            {
+                                projectileImpactExplosion.lifetime = projectileImpactExplosion.lifetime * (1 - (bombLauncher.charge / bombLauncher.chargeCap));
+                            }
+                        }
+                    }
+                    else
+                    {
+                        return;
+                    }
+                }
+                
             }
             public void OnProjectileImpact(ProjectileImpactInfo impactInfo)
             {
@@ -1879,6 +1902,7 @@ namespace DemomanRor2
             private Rigidbody rigidbody;
             private ProjectileImpactExplosion projectileImpactExplosion;
             private string currentName;
+            public DemoSoundClass demoSound = DemoStickyDetonationSound;
             //public void OnEnable()
             //{
 
@@ -2242,7 +2266,7 @@ namespace DemomanRor2
             BulletAttack DefaultBulletAttack = new BulletAttack()
             {
                 radius = 1f,
-                damage = 3,
+                damage = 5,
                 bulletCount = 1,
                 maxDistance = 6,
                 allowTrajectoryAimAssist = true,
@@ -2250,14 +2274,14 @@ namespace DemomanRor2
                 procCoefficient = 1f,
                 stopperMask = LayerIndex.world.mask,
                 force = 3f,
-                hitCallback = null
+                hitCallback = default
 
             };
             DefaultSword = new DemoSwordClass(DefaultBulletAttack);
             BulletAttack SkullcutterBulletAttack = new BulletAttack()
             {
                 radius = 1f,
-                damage = 3,
+                damage = 5,
                 bulletCount = 1,
                 maxDistance = 7,
                 allowTrajectoryAimAssist = true,
@@ -2304,7 +2328,7 @@ namespace DemomanRor2
             BulletAttack ZatoichiBulletAttack = new BulletAttack()
             {
                 radius = 1f,
-                damage = 3,
+                damage = 5,
                 bulletCount = 1,
                 maxDistance = 6,
                 allowTrajectoryAimAssist = true,
@@ -2339,7 +2363,7 @@ namespace DemomanRor2
             BulletAttack CaberBulletAttack = new BulletAttack()
             {
                 radius = 1f,
-                damage = 1,
+                damage = 3,
                 bulletCount = 1,
                 maxDistance = 4,
                 allowTrajectoryAimAssist = true,
@@ -2418,7 +2442,7 @@ namespace DemomanRor2
             BulletAttack EyelanderBulletAttack = new BulletAttack()
             {
                 radius = 1f,
-                damage = 2,
+                damage = 5,
                 bulletCount = 1,
                 maxDistance = 6,
                 allowTrajectoryAimAssist = true,
@@ -2508,11 +2532,6 @@ namespace DemomanRor2
             //LanguageAPI.Add("DEMOMAN_SPECIALTWOALT_NAME", "Trap Storm");
             //LanguageAPI.Add("DEMOMAN_SPECIALTWOALT_DESC", $"Stick.");
             ManthreadsSkillDef = PassiveInit(ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoMannthreadsSkillIcon.png"), "DemoStompPassive", "DEMO_STOMPSKILL_NAME", "DEMO_STOMPSKILL_DESC");
-            
-            LoadoutSkillTitlesPlugin.AddTitleToken("DemoBody", 0, "LOADOUT_SKILL_PASSIVE");
-            LoadoutSkillTitlesPlugin.AddTitleToken("DemoBody", 2, "LOADOUT_SKILL_PRIMARY");
-            LoadoutSkillTitlesPlugin.AddTitleToken("DemoBody", 5, "DEMO_DETONATE_LOADOUT_TOKEN");
-            LanguageAPI.Add("DEMO_DETONATE_LOADOUT_TOKEN", "Detonate");
 
             foreach (var variant in demoStickyFamily.variants)
             {
@@ -2521,6 +2540,7 @@ namespace DemomanRor2
             InitSkillStats();
             InitProjectiles();
             InitShields();
+            InitStates();
         }
 
 
@@ -2645,7 +2665,7 @@ namespace DemomanRor2
             AddSkillToFamily(ref skillFamily, mySkillDef);
             return mySkillDef;
         }
-        private static SkillDef SpecialInit(Type state, Sprite sprite, string name, string nameToken, string descToken, string stateName, float recharge = 10f)
+        private static SkillDef SpecialInit(Type state, Sprite sprite, string name, string nameToken, string descToken, string stateName, float recharge = 10f, bool beginSkillCooldownOnSkillEnd = true)
         {
             GameObject commandoBodyPrefab = DemoBody;
             SkillDef mySkillDef = ScriptableObject.CreateInstance<SkillDef>();
@@ -2653,7 +2673,7 @@ namespace DemomanRor2
             mySkillDef.activationStateMachineName = stateName;
             mySkillDef.baseMaxStock = 1;
             mySkillDef.baseRechargeInterval = recharge;
-            mySkillDef.beginSkillCooldownOnSkillEnd = true;
+            mySkillDef.beginSkillCooldownOnSkillEnd = beginSkillCooldownOnSkillEnd;
             mySkillDef.canceledFromSprinting = false;
             mySkillDef.cancelSprintingOnActivation = true;
             mySkillDef.fullRestockOnAssign = true;
@@ -2798,7 +2818,37 @@ namespace DemomanRor2
             public GameObject stickyObject = stickyObject;
             public float damage = damage;
         }
-        public static void InitSwordAttacks()
+        private static void InitStates()
+        {
+            bool wasAdded = false;
+            ContentAddition.AddEntityState<DemoSword>(out wasAdded);
+            ContentAddition.AddEntityState<ShieldCharge>(out wasAdded);
+            ContentAddition.AddEntityState<GrenadeLauncher>(out wasAdded);
+            ContentAddition.AddEntityState<PillLauncher>(out wasAdded);
+            ContentAddition.AddEntityState<RocketLauncher>(out wasAdded);
+            ContentAddition.AddEntityState<StickyLauncher>(out wasAdded);
+            ContentAddition.AddEntityState<JumperLauncher>(out wasAdded);
+            ContentAddition.AddEntityState<MineLayer>(out wasAdded);
+            ContentAddition.AddEntityState<AntigravLauncher>(out wasAdded);
+            ContentAddition.AddEntityState<HookLauncher>(out wasAdded);
+            ContentAddition.AddEntityState<BombLauncher>(out wasAdded);
+            ContentAddition.AddEntityState<Detonate>(out wasAdded);
+            ContentAddition.AddEntityState<SpecialOneSticky>(out wasAdded);
+            ContentAddition.AddEntityState<SpecialOneSword>(out wasAdded);
+            ContentAddition.AddEntityState<SpecialOneRedirector>(out wasAdded);
+            ContentAddition.AddEntityState<UltraInstinctRedirect>(out wasAdded);
+            ContentAddition.AddEntityState<UltraInstinctState>(out wasAdded);
+            ContentAddition.AddEntityState<UltraInstinctSticky>(out wasAdded);
+            ContentAddition.AddEntityState<UltraInstinctSword>(out wasAdded);
+            ContentAddition.AddEntityState<Slam>(out wasAdded);
+            ContentAddition.AddEntityState<ShieldCharge>(out wasAdded);
+            ContentAddition.AddEntityState<ShieldChargeAntigravity>(out wasAdded);
+            ContentAddition.AddEntityState<ShieldChargeHeavy>(out wasAdded);
+            ContentAddition.AddEntityState<ShieldChargeLight>(out wasAdded);
+            ContentAddition.AddEntityState<ChangeWeapons>(out wasAdded);
+            Debug.LogError("States have been initialised");
+        }
+        private static void InitSwordAttacks()
         {
 
             
@@ -2907,10 +2957,10 @@ namespace DemomanRor2
                 "Base damage: " + LangueagePrefix((grenadeLauncher.damage * 100).ToString() + "%", LanguagePrefixEnum.Damage) + "\n" +
                 "Fire rate: " + LangueagePrefix((grenadeLauncher.fireRate).ToString() + "s", LanguagePrefixEnum.Damage) + "\n" +
                 "Base stocks: " + LangueagePrefix((skillDef.baseMaxStock).ToString(), LanguagePrefixEnum.Damage) + "\n" +
-                "Reload time" + LangueagePrefix((skillDef.baseRechargeInterval).ToString(), LanguagePrefixEnum.Damage) + "\n" +
-                "Stocks to reload" + LangueagePrefix((skillDef.rechargeStock).ToString(), LanguagePrefixEnum.Damage) + "\n" +
+                "Reload time: " + LangueagePrefix((skillDef.baseRechargeInterval).ToString(), LanguagePrefixEnum.Damage) + "\n" +
+                "Stocks to reload: " + LangueagePrefix((skillDef.rechargeStock).ToString(), LanguagePrefixEnum.Damage) + "\n" +
                 "Charge time: " + LangueagePrefix(grenadeLauncher.canBeCharged ? ((grenadeLauncher.chargeCap).ToString() + "s") : "Can't be charged", LanguagePrefixEnum.Damage) + "\n" +
-                "");
+                explosionString);
         }
         private static void InitProjectiles()
         {
@@ -2956,14 +3006,15 @@ namespace DemomanRor2
             private float stopwatch = 0f;
             private bool fired = true;
             public GenericSkill activatorSkillSlot { get; set; }
-
             public float range;
             public float radius;
             public bool isCrit;
             public GameObject swingEffect = SwingEffect;
+            public BulletAttack bulletAttack;
             public override void OnEnter()
             {
                 base.OnEnter();
+                bulletAttack = swordDictionary.ContainsKey(activatorSkillSlot.skillDef) ? ModifyAttack(swordDictionary[activatorSkillSlot.skillDef].bulletAttack) : ModifyAttack(DefaultSword.bulletAttack);
                 if (stopwatch <= 0)
                 {
                     PlayAnimation("Gesture, Override", "Swing", "Slash.playbackRate", 1f / base.attackSpeedStat);
@@ -2980,9 +3031,9 @@ namespace DemomanRor2
                 {
                     stopwatch -= GetDeltaTime();
                 }
-                if (isAuthority && !fired && stopwatch < 0)
+                if (!fired && stopwatch < 0)
                 {
-                    BulletAttack bulletAttack = swordDictionary.ContainsKey(activatorSkillSlot.skillDef) ? ModifyAttack(swordDictionary[activatorSkillSlot.skillDef].bulletAttack) : DefaultSword.bulletAttack;
+                    //BulletAttack bulletAttack = swordDictionary.ContainsKey(activatorSkillSlot.skillDef) ? ModifyAttack(swordDictionary[activatorSkillSlot.skillDef].bulletAttack) : DefaultSword.bulletAttack;
                     SwingSword(bulletAttack);
                     fired = true;
                     stopwatch = 0.5f / base.attackSpeedStat;
@@ -3038,6 +3089,7 @@ namespace DemomanRor2
                 var vel = particleSystem.velocityOverLifetime;
                 vel.speedModifier = bulletAttack.maxDistance;
                 Util.PlaySound(DemoSwordSwingSound.playSoundString, gameObject);
+                if (isAuthority)
                 bulletAttack.Fire();
             }
             public override InterruptPriority GetMinimumInterruptPriority()
@@ -3103,15 +3155,7 @@ namespace DemomanRor2
                     base.characterMotor.rootMotion += chargeVector * moveSpeedStat * chargeSpeed * GetDeltaTime();
 
                 }
-
-            }
-            public virtual void FixedUpdateAuthority()
-            {
                 RaycastHit hit;
-                if (chargeMeterHUD)
-                {
-                    chargeMeterHUD.fillAmount = chargePercentage;
-                }
                 Ray ray = new Ray
                 {
                     direction = characterDirection.forward,
@@ -3125,7 +3169,6 @@ namespace DemomanRor2
                     }
                     else
                     {
-                        outer.SetNextStateToMain();
                         HealthComponent healthComponent = hit.collider.GetComponent<HurtBox>()?.healthComponent;
                         if (healthComponent)
                         {
@@ -3150,10 +3193,25 @@ namespace DemomanRor2
                         {
                             Util.PlaySound(DemoChargeWorldHitSound.playSoundString, gameObject);
                         }
+                        if (isAuthority)
+                        {
+                            outer.SetNextStateToMain();
+
+                        }
                     }
-                    
-                    
+
+
                 }
+
+            }
+            public virtual void FixedUpdateAuthority()
+            {
+                
+                if (chargeMeterHUD)
+                {
+                    chargeMeterHUD.fillAmount = chargePercentage;
+                }
+                
             }
             public virtual void OnStageOne()
             {
@@ -3301,15 +3359,18 @@ namespace DemomanRor2
             public override void OnEnter()
             {
                 base.OnEnter();
+                demoComponent = gameObject.GetComponent<DemoComponent>();
+                if (canBeCharged) Util.PlaySound(DemoCannonChargeSound.playSoundString, gameObject);
                 if (base.isAuthority)
                 {
-                    demoComponent = gameObject.GetComponent<DemoComponent>();
+                    
                     chargeMeter = demoComponent ? demoComponent.meterImage : null;
                     if (chargeMeter)
                     {
                         demoComponent.updateMeter = false;
                         chargeMeter.fillAmount = 0f;
                     }
+                    
                 }
 
             }
@@ -3321,9 +3382,12 @@ namespace DemomanRor2
                 if (stopCharge)
                 {
                     stopCharge = true;
+                    if (isAuthority)
                     demoComponent.updateMeter = true;
                 }
                 TrajectoryAimAssist.ApplyTrajectoryAimAssist(ref aimRay, projectile, base.gameObject, 1f);
+                //Util.PlaySound(DemoGrenadeShootSound.playSoundString, gameObject);
+                if (canBeCharged) Util.PlaySound(DemoCannonChargeSound.stopSoundString, gameObject);
                 FireProjectileInfo fireProjectileInfo = new FireProjectileInfo
                 {
                     projectilePrefab = projectile,
@@ -3336,12 +3400,18 @@ namespace DemomanRor2
                     speedOverride = chargeTags.Contains(GrenadeLauncherChargeAffection.Speed) ? projectile.GetComponent<ProjectileSimple>().desiredForwardSpeed * (1 + charge) : -1f,
                     damageTypeOverride = new DamageTypeCombo?(new DamageTypeCombo(DamageType.Generic, DamageTypeExtended.Generic, GetDamageSource()))
                 };
+                ModifiyProjectileFireInfo(ref fireProjectileInfo);
+                if (isAuthority)
+                {
+                    ProjectileManager.instance.FireProjectile(fireProjectileInfo);
+                }
                 if (chargeMeter)
                 {
                     chargeMeter.fillAmount = 0f;
                 }
-                ModifiyProjectileFireInfo(ref fireProjectileInfo);
-                ProjectileManager.instance.FireProjectile(fireProjectileInfo);
+                
+                Util.PlaySound(fireProjectileInfo.crit ? DemoGrenadeShootCritSound.playSoundString : DemoGrenadeShootSound.playSoundString, gameObject);
+                
                 OnProjectileFired();
             }
             private DamageSource GetDamageSource()
@@ -3400,9 +3470,10 @@ namespace DemomanRor2
                 {
                     stopwatch -= GetDeltaTime();
                 }
-                if (isAuthority)
+                if (true)
                 {
-                    if (!stopCharge && chargeMeter)
+                    
+                    if (isAuthority && !stopCharge && chargeMeter)
                     {
                         chargeMeter.fillAmount = charge / chargeCap;
                     }
@@ -3418,7 +3489,7 @@ namespace DemomanRor2
                         }
                         released = true;
                     }
-                    if (fired && stopwatch <= 0)
+                    if (isAuthority && fired && stopwatch <= 0)
                     {
                         outer.SetNextStateToMain();
                     }
@@ -3470,36 +3541,29 @@ namespace DemomanRor2
             public override bool canBeCharged => false;
 
             public override float fireRate => 0.5f;
-
             public override bool isPrimary => false;
-
             public override float chargeCap => 0f;
 
         }
         public class HookLauncher : GrenadeLauncher
         {
             public override float damage => 0f;
-
             public override GameObject projectile => Main.HookProjectile;
             public override GrenadeLauncherChargeAffection[] chargeTags => new GrenadeLauncherChargeAffection[] { };
-
             public override bool canBeCharged => true;
-
             public override float fireRate => 0.5f;
-
             public override bool isPrimary => false;
-
             public override float chargeCap => 12f;
-            public override void OnProjectileFired()
-            {
-            }
             public override void OnEnter()
             {
                 base.OnEnter();
-                if (isAuthority)
-                {
+                //if (isAuthority)
+                //{
                     FireProjectile(false);
-                }
+                //}
+            }
+            public override void OnProjectileFired()
+            {
             }
             public override void OnEarlyChargeEnd()
             {
@@ -3509,7 +3573,6 @@ namespace DemomanRor2
             {
                 outer.SetNextStateToMain();
             }
-
         }
         public class NukeLauncher : GrenadeLauncher
         {
@@ -3530,15 +3593,10 @@ namespace DemomanRor2
         public class BombLauncher : GrenadeLauncher
         {
             public override float damage => 4f;
-
             public override GameObject projectile => Main.BombProjectile;
-
             public override bool canBeCharged => true;
-
             public override float fireRate => 0.5f;
-
             public override bool isPrimary => false;
-
             public override float chargeCap => 1f;
             public override GrenadeLauncherChargeAffection[] chargeTags => new GrenadeLauncherChargeAffection[] { };
 
@@ -3546,7 +3604,7 @@ namespace DemomanRor2
         public class StickyLauncher : GrenadeLauncher
         {
             public override float damage => 6f;
-            public override float fireRate => 0.3f;
+            public override float fireRate => 0.5f;
 
             public override GameObject projectile => Main.StickyProjectile;
 
@@ -3561,7 +3619,7 @@ namespace DemomanRor2
         public class JumperLauncher : GrenadeLauncher
         {
             public override float damage => 0f;
-            public override float fireRate => 0.2f;
+            public override float fireRate => 0.3f;
 
             public override GameObject projectile => Main.JumperProjectile;
 
@@ -3590,7 +3648,7 @@ namespace DemomanRor2
         public class MineLayer : GrenadeLauncher
         {
             public override float damage => 9f;
-            public override float fireRate => 0.6f;
+            public override float fireRate => 0.3f;
 
             public override GameObject projectile => Main.MineProjectile;
 
@@ -3665,9 +3723,36 @@ namespace DemomanRor2
             demoComponent = gameObject.GetComponent<Main.DemoComponent>();
             if (demoComponent != null)
             {
-                DetonateAllStickies(demoComponent);
+                DetonateAllStickies();
             }
             outer.SetNextStateToMain();
+        }
+        public void DetonateAllStickies()
+        {
+            bool noArmed = false;
+            int stickyCount = 0;
+            while (!noArmed)
+            {
+                noArmed = true;
+                for (int i = 0; i < demoComponent.stickies.Count; i++)
+                {
+                    List<StickyComponent> stickies = demoComponent.stickies.ElementAt(i).Value;
+                    for (int j = 0; j < stickies.Count; j++)
+                    {
+                        if (stickies[j] != null && stickies[j].isArmed)
+                        {
+                            stickyCount++;
+                            noArmed = false;
+                            stickies[j].DetonateSticky();
+                        }
+                    }
+
+                }
+            }
+            if (stickyCount > 0)
+            {
+                Util.PlaySound(DemoStickyDetonationSound.playSoundString, gameObject);
+            }
         }
         public override void FixedUpdate()
         {
@@ -3786,6 +3871,7 @@ namespace DemomanRor2
             EntityStateMachine[] entityStateMachines = gameObject.GetComponents<EntityStateMachine>();
             EntityStateMachine bodyStateMachine = null;
             EntityStateMachine weaponStateMachine = null;
+            EntityStateMachine extraStateMachine = null;
             foreach (EntityStateMachine entityStateMachine in entityStateMachines)
             {
                 if (entityStateMachine.customName == "Weapon")
@@ -3796,13 +3882,20 @@ namespace DemomanRor2
                 {
                     bodyStateMachine = entityStateMachine;
                 }
+                if (entityStateMachine.customName == "Extra")
+                {
+                    extraStateMachine =entityStateMachine;
+                }
             }
             if (demoComponent && demoComponent.isSwapped)
             {
                 if (weaponStateMachine)
                 {
-                    weaponStateMachine.SetNextState(new SpecialOneSticky());
-                    outer.SetNextStateToMain();
+                    weaponStateMachine.SetNextState(new SpecialOneSticky
+                    {
+                        previousStateMachine = extraStateMachine,
+                    });
+                    if (!extraStateMachine) outer.SetNextStateToMain();
                 }
                 else
                 {
@@ -3814,8 +3907,11 @@ namespace DemomanRor2
             {
                 if (bodyStateMachine)
                 {
-                    bodyStateMachine.SetNextState(new SpecialOneSword());
-                    outer.SetNextStateToMain();
+                    bodyStateMachine.SetNextState(new SpecialOneSword
+                    {
+                        previousStateMachine = extraStateMachine
+                    });
+                    if (!extraStateMachine) outer.SetNextStateToMain();
                 }
                 else
                 {
@@ -3899,6 +3995,7 @@ namespace DemomanRor2
         private GameObject spinner;
         private CharacterDirection characterDirection;
         private Vector3 rotationVector = Vector3.zero;
+        public EntityStateMachine previousStateMachine;
         public override void OnEnter()
         {
             base.OnEnter();
@@ -3931,6 +4028,7 @@ namespace DemomanRor2
             if (characterMotor) characterMotor.useGravity = true;
             characterBody.RemoveBuff(RoR2Content.Buffs.ArmorBoost);
             Destroy(spinner);
+            if (previousStateMachine != null) previousStateMachine.SetNextStateToMain();
         }
         public override void FixedUpdate()
         {
@@ -4052,6 +4150,7 @@ namespace DemomanRor2
         private Vector3 forward;
         private GameObject projectile;
         private float damage;
+        public EntityStateMachine previousStateMachine;
         public override void OnEnter()
         {
             base.OnEnter();
@@ -4080,6 +4179,10 @@ namespace DemomanRor2
                 demoComponent.noLimitStickies--;
                 demoComponent.additionalArmTime += 10f;
             }
+            if (previousStateMachine)
+            {
+                previousStateMachine.SetNextStateToMain();
+            }
         }
         public virtual void ModifyProjectileFireInfo(ref FireProjectileInfo fireProjectileInfo)
         {
@@ -4098,8 +4201,8 @@ namespace DemomanRor2
                     InputBankTest component6 = characterBody.inputBank;
                     Vector3 forward2 = component6 ? component6.aimDirection : transform.forward;
                     float num15 = 20f;
-                    float minInclusive = 15f;
-                    float maxInclusive = 30f;
+                    float minInclusive = 40f;
+                    float maxInclusive = 50f;
                     float speedOverride2 = UnityEngine.Random.Range(minInclusive, maxInclusive);
                     float num17 = (float)(360 / fireTimes);
                     float num18 = num17 / 360f;
@@ -4164,6 +4267,7 @@ namespace DemomanRor2
         public abstract bool overcharge { get; }
         private float speed2 = 0f;
         private int phase = 0;
+        public EntityStateMachine previousStateMachine;
 
         public GenericSkill activatorSkillSlot { get; set; }
         public virtual void OnFound()
@@ -4266,6 +4370,7 @@ namespace DemomanRor2
                     if (currentTarget && bodies.Contains(currentTarget))
                     {
                         if (bodies.Contains(currentTarget)) bodies.Remove(currentTarget);
+                        //if (isAuthority)
                         OnContact();
                     }
 
@@ -4299,7 +4404,7 @@ namespace DemomanRor2
         public override void FixedUpdate()
         {
             base.FixedUpdate();
-            if (isAuthority)
+            if (true)
             {
                 if (stopwatch > 0f) stopwatch -= GetDeltaTime();
                 if (stopwatch <= 0f && phase == 0)
@@ -4324,6 +4429,7 @@ namespace DemomanRor2
                 if (characterMotor) characterMotor.useGravity = true;
             }
             characterBody.RemoveBuff(RoR2Content.Buffs.ArmorBoost);
+            if (previousStateMachine) previousStateMachine.SetNextStateToMain();
         }
         public override void Update()
         {
@@ -4340,15 +4446,21 @@ namespace DemomanRor2
             DemoComponent demoComponent = GetComponent<DemoComponent>();
             if (demoComponent && demoComponent.isSwapped)
             {
-                UltraInstinctSticky ultraInstinctSticky = new UltraInstinctSticky();
-                ultraInstinctSticky.activatorSkillSlot = activatorSkillSlot;
-                outer.SetNextState(ultraInstinctSticky);
+                outer.SetNextState(new UltraInstinctSticky
+                {
+                    activatorSkillSlot = activatorSkillSlot,
+                    previousStateMachine = activatorSkillSlot.stateMachine,
+                });
             }
             else
             {
                 UltraInstinctSword ultraInstinctSword = new UltraInstinctSword();
                 ultraInstinctSword.activatorSkillSlot = activatorSkillSlot;
-                outer.SetNextState(ultraInstinctSword);
+                outer.SetNextState(new UltraInstinctSword
+                {
+                    activatorSkillSlot = activatorSkillSlot,
+                    previousStateMachine = activatorSkillSlot.stateMachine,
+                });
             }
         }
     }
@@ -4451,214 +4563,6 @@ namespace DemomanRor2
                 useSpeedOverride = true
             };
             ProjectileManager.instance.FireProjectile(fireProjectileInfo);
-        }
-    }
-    public class SpecialTwo : BaseState, ISkillState
-    {
-        private BulletAttack bulletAttack;
-        private List<CharacterBody> bodies = new List<CharacterBody>();
-        private CharacterBody currentTarget;
-        private Vector3 targetDirection;
-        private Vector3 initialPosition;
-        private Vector3 previousPosition;
-        private Vector3 targetPosition;
-        private bool returning = false;
-        private float stopwatch = 0f;
-        private float stopwatch2 = 0f;
-        private int phase = 0;
-        private float speed = 96f;
-
-        public GenericSkill activatorSkillSlot { get; set; }
-
-        public override void OnEnter()
-        {
-            base.OnEnter();
-            if (isAuthority)
-            {
-                bulletAttack = swordDictionary.ContainsKey(skillLocator.primary.skillDef) ? swordDictionary[skillLocator.primary.skillDef].bulletAttack : DefaultSword.bulletAttack;
-                FindTargets();
-
-                if (characterMotor)
-                {
-                    KinematicCharacterMotor kinematicCharacterMotor = GetComponent<KinematicCharacterMotor>();
-                    if (kinematicCharacterMotor)
-                        kinematicCharacterMotor.ForceUnground(0f);
-                    characterMotor.velocity += new Vector3(0f, 20f, 0f);
-                }
-
-                if (bodies.Count <= 0)
-                {
-                    outer.SetNextStateToMain();
-                    return;
-                }
-                stopwatch = 1f;
-                speed *= base.attackSpeedStat;
-            }
-
-        }
-        public void FindTargets()
-        {
-            Collider[] collidersArray = Physics.OverlapSphere(transform.position, 24f, LayerIndex.entityPrecise.mask, QueryTriggerInteraction.UseGlobal);
-            foreach (Collider collider in collidersArray)
-            {
-                CharacterBody body = collider.GetComponent<HurtBox>() ? collider.GetComponent<HurtBox>().healthComponent.body : null;
-                if (body && body.teamComponent.teamIndex != characterBody.teamComponent.teamIndex && !bodies.Contains(body))
-                {
-                    bodies.Add(body);
-                }
-            }
-        }
-        public void Update1()
-        {
-
-        }
-        public void Swap()
-        {
-            phase++;
-            stopwatch = -69f;
-
-
-            currentTarget = bodies.Count > 0 ? bodies.FirstOrDefault() : null;
-            targetDirection = currentTarget ? currentTarget.transform.position - transform.position : Vector3.zero;
-            initialPosition = transform.position;
-            if (characterMotor) characterMotor.useGravity = false;
-            Calculate();
-
-        }
-        public void Calculate()
-        {
-            bodies.RemoveAll(s => s == null);
-            if (bodies.Count <= 0)
-            {
-                returning = true;
-
-            }
-            previousPosition = transform.position;
-            //if (colliders.Count <= 0) outer.SetNextStateToMain();
-            if (!returning)
-            {
-                currentTarget = bodies.FirstOrDefault();
-                if (currentTarget == null)
-                {
-
-                }
-                else
-                {
-                    targetPosition = currentTarget.transform.position;
-                }
-
-            }
-            else
-            {
-                targetPosition = initialPosition;
-
-            }
-            targetDirection = targetPosition - transform.position;
-            stopwatch2 = targetDirection.magnitude / speed;
-            PlayAnimation("FullBody, Override", "Ball", "Slash.playbackRate", stopwatch2);
-        }
-        public void Update2()
-        {
-            stopwatch2 -= Time.fixedDeltaTime;
-            Chat.AddMessage(stopwatch2.ToString());
-            if (stopwatch2 < 0)
-            {
-                if (!returning)
-                {
-                    if (currentTarget && bodies.Contains(currentTarget))
-                    {
-                        if (bodies.Contains(currentTarget)) bodies.Remove(currentTarget);
-                        BulletAttack bulletAttack2 = new BulletAttack()
-                        {
-                            radius = 0.1f,
-                            aimVector = Vector3.up,
-                            damage = base.damageStat * (bulletAttack != null ? bulletAttack.damage : 3f),
-                            bulletCount = 1,
-                            spreadPitchScale = 0f,
-                            spreadYawScale = 0f,
-                            maxSpread = 0f,
-                            minSpread = 0f,
-                            maxDistance = 0.1f,
-                            allowTrajectoryAimAssist = false,
-                            hitMask = LayerIndex.entityPrecise.mask,
-                            procCoefficient = bulletAttack != null ? bulletAttack.procCoefficient : 1f,
-                            stopperMask = LayerIndex.entityPrecise.mask,
-                            damageType = new DamageTypeCombo(DamageType.Generic, DamageTypeExtended.Generic, DamageSource.Special),
-                            force = bulletAttack != null ? bulletAttack.force : 1f,
-                            falloffModel = BulletAttack.FalloffModel.None,
-                            damageColorIndex = DamageColorIndex.Default,
-                            isCrit = base.RollCrit(),
-                            origin = currentTarget.transform.position,
-                            owner = gameObject,
-                            hitCallback = bulletAttack != null ? bulletAttack.hitCallback : default,
-
-                        };
-                        bulletAttack2.Fire();
-                    }
-
-                    Calculate();
-                }
-                else if (activatorSkillSlot.stock > 0)
-                {
-                    FindTargets();
-                    if (bodies.Count <= 0)
-                    {
-                        outer.SetNextStateToMain();
-                        return;
-                    }
-                    else if (!returning)
-                    {
-                        activatorSkillSlot.stock--;
-                    }
-                }
-                else
-                {
-                    outer.SetNextStateToMain();
-                }
-
-            }
-            else
-            {
-
-                if (characterMotor) characterMotor.rootMotion += targetDirection.normalized * speed * GetDeltaTime();
-            }
-        }
-        public override void FixedUpdate()
-        {
-            base.FixedUpdate();
-            if (isAuthority)
-            {
-                if (stopwatch > 0f) stopwatch -= GetDeltaTime();
-                if (stopwatch <= 0f && phase == 0)
-                    Swap();
-                if (stopwatch > 0f)
-                {
-                    Update1();
-                }
-                else
-                {
-                    Update2();
-                }
-
-
-            }
-        }
-        public override void OnExit()
-        {
-            base.OnExit();
-            if (isAuthority)
-            {
-                if (characterMotor) characterMotor.useGravity = true;
-            }
-        }
-        public override void Update()
-        {
-            base.Update();
-            if (isAuthority && characterDirection) characterDirection.forward = targetDirection.normalized;
-        }
-        public override InterruptPriority GetMinimumInterruptPriority()
-        {
-            return InterruptPriority.Skill;
         }
     }/*
     public class SpecialTwoAlt : BaseState
@@ -4819,107 +4723,17 @@ namespace DemomanRor2
             DemoComponent demoComponent = GetComponent<DemoComponent>();
             if (skillLocator && demoComponent != null)
             {
-
                 GenericSkill genericSkill2 = skillLocator.primary;
                 skillLocator.primary = demoComponent.primaryReplace;
                 demoComponent.primaryReplace = genericSkill2;
-                //Debug.Log(genericSkill1.skillDef);
-                //Debug.Log(genericSkill2.skillDef);
-                //Util.Swap<GenericSkill>(ref genericSkill1, ref genericSkill2);
-                //Debug.Log(genericSkill1.skillDef);
-                //Debug.Log(genericSkill2.skillDef);w
                 GenericSkill genericSkill4 = skillLocator.utility;
                 skillLocator.utility = demoComponent.utilityReplace;
                 demoComponent.utilityReplace = genericSkill4;
                 demoComponent.canUseUtilityTimer = 0.1f;
                 demoComponent.canUseUtility = false;
                 demoComponent.canUseSecondaryTimer = 0.1f;
-                //demoComponent.canUseSecondary = false;
-                //Debug.Log(genericSkill3.skillDef);
-                //Debug.Log(genericSkill4.skillDef);
-                //Util.Swap<GenericSkill>(ref genericSkill3, ref genericSkill4);
-                //Debug.Log(genericSkill3.skillDef);
-                //Debug.Log(genericSkill4.skillDef);
-                //Util.Swap<GenericSkill>(ref genericSkill2, ref genericSkill2);
-                //genericSkill1 = demoComponent.specialReplace;
-                //genericSkill2 = skillLocator.special;
-                //Util.Swap<GenericSkill>(ref genericSkill2, ref genericSkill2);
                 demoComponent.UpdateHudObject();
             }
-            /*
-            //GenericSkill primarySkill = base.skillLocator.allSkills[0];
-            //GenericSkill primarySkill2 = base.skillLocator.FindSkillByFamilyName("DemoStickyFamily");
-            //Util.Swap<GenericSkill>(ref primarySkill, ref primarySkill2);
-            //GenericSkill utilitySkill = base.skillLocator.allSkills[0];
-            //GenericSkill utilitySkill2 = DetonateSkillDef;
-            //DemoComponent demo = gameObject.GetComponent<DemoComponent>();
-            //CachedSkillsLocator cachedSkillsLocator = GetComponent<CachedSkillsLocator>();
-            if (true)
-            {
-                GenericSkill genericSkill = base.skillLocator.FindSkillByFamilyName("DemoStickies");
-                bool switchOff = false;
-                if (base.skillLocator.primary.skillOverrides.Length > 0)
-                    foreach (var skillOverride in base.skillLocator.primary.skillOverrides)
-                    {
-                        if (skillOverride.skillDef == genericSkill.baseSkill && skillOverride.priority == GenericSkill.SkillOverridePriority.Loadout)
-                        {
-                            switchOff = true;
-                            break;
-                        }
-
-                    }
-                SkillDef detonateSkill = DetonateSkillDef;
-                if (customDetonationSkills.ContainsKey(genericSkill.baseSkill)) detonateSkill = customDetonationSkills[genericSkill.baseSkill];
-                if (switchOff)
-                {
-                    //float primaryStopwatch = skillLocator.primary.rechargeStopwatch;
-                    //int primaryStocks = skillLocator.primary.stock;
-                    //SkillDef primarySkillDef = skillLocator.primary.skillDef;
-                    //base.skillLocator.primary.UnsetSkillOverride(base.characterBody, base.skillLocator.FindSkillByFamilyName("DemoStickies").baseSkill, GenericSkill.SkillOverridePriority.Loadout);
-                    base.skillLocator.utility.UnsetSkillOverride(base.characterBody, detonateSkill, GenericSkill.SkillOverridePriority.Loadout);
-                    if (altSpecialSkills.ContainsKey(skillLocator.special.baseSkill))
-                    {
-                        float specialRecharge = skillLocator.special.rechargeStopwatch;
-                        int specialStocks = skillLocator.special.stock;
-                        base.skillLocator.special.UnsetSkillOverride(base.characterBody, altSpecialSkills[skillLocator.special.baseSkill], GenericSkill.SkillOverridePriority.Loadout);
-                        skillLocator.special.rechargeStopwatch = specialRecharge;
-                        skillLocator.special.stock = specialStocks;
-                    }
-                    //skillLocator.primary.rechargeStopwatch = demo.primaryCooldown;
-                    //skillLocator.primary.stock = demo.primaryStockCount;
-                    //demo.primarySkillDef = primarySkillDef;
-                    //demo.primaryCooldown = primaryStopwatch;
-                    //demo.primaryStockCount = primaryStocks;
-                }
-                else
-                {
-
-                    //float primaryStopwatch = skillLocator.primary.rechargeStopwatch;
-                    //int primaryStocks = skillLocator.primary.stock;
-                    //SkillDef primarySkillDef = skillLocator.primary.skillDef;
-                    //cachedSkillsLocator.GetOrCreateCachedGenericSkill(skillLocator.primary, "DemoSticky");
-                    //cachedSkillsLocator.DeleteCachedSkill("DemoSword");
-                    //base.skillLocator.primary.SetSkillOverride(base.characterBody, base.skillLocator.FindSkillByFamilyName("DemoStickies").baseSkill, GenericSkill.SkillOverridePriority.Loadout);
-                    base.skillLocator.utility.SetSkillOverride(base.characterBody, detonateSkill, GenericSkill.SkillOverridePriority.Loadout);
-                    if (altSpecialSkills.ContainsKey(skillLocator.special.baseSkill))
-                    {
-                        float specialRecharge = skillLocator.special.rechargeStopwatch;
-                        int specialStocks = skillLocator.special.stock;
-                        base.skillLocator.special.SetSkillOverride(base.characterBody, altSpecialSkills[skillLocator.special.baseSkill], GenericSkill.SkillOverridePriority.Loadout);
-                        skillLocator.special.rechargeStopwatch = specialRecharge;
-                        skillLocator.special.stock = specialStocks;
-                    }
-                    //skillLocator.primary.rechargeStopwatch = demo.primaryCooldown;
-                    //skillLocator.primary.stock = demo.primaryStockCount;
-                    //demo.primarySkillDef = primarySkillDef;
-                    //demo.primaryCooldown = primaryStopwatch;
-                    //demo.primaryStockCount = primaryStocks;
-
-                }
-            }*/
-
-
-
             outer.SetNextStateToMain();
         }
         public override void OnExit()
