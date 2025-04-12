@@ -5,55 +5,32 @@ using R2API.Utils;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Reflection;
 using UnityEngine;
 using System.Security.Permissions;
 using RoR2.Projectile;
 using UnityEngine.Networking;
 using UnityEngine.AddressableAssets;
-using static RoR2.VFXAttributes;
-using System.IO;
 using RoR2.UI;
-using static ak.wwise.core;
-using static RoR2.Console;
 using TMPro;
 using UnityEngine.UI;
-using HG;
-using RoR2.Navigation;
-using R2API.Networking;
-using EmotesAPI;
-using RoR2.ContentManagement;
-using static ak.wwise;
-using System.Collections;
 using EntityStates;
 using RoR2.Skills;
 using DemomanRor2;
 using static DemomanRor2.Skills;
 using static DemomanRor2.Main;
-using static Rewired.InputMapper;
 using Newtonsoft.Json.Utilities;
-using static Rewired.Demos.GamepadTemplateUI.GamepadTemplateUI;
-using static UnityEngine.SendMouseEvents;
 using RoR2.HudOverlay;
-using RoR2.ExpansionManagement;
 using System.Runtime.CompilerServices;
-using static Rewired.ComponentControls.Effects.RotateAroundAxis;
 using KinematicCharacterController;
-using static UnityEngine.UI.GridLayoutGroup;
-using static MonoMod.InlineRT.MonoModRule;
-using EntityStates.VoidRaidCrab.Leg;
-using UnityEngine.Bindings;
 using System.Security;
 using MonoMod.Cil;
 using Mono.Cecil.Cil;
-using static R2API.SoundAPI.Music.CustomMusicTrackDef;
-using UnityEngine.PlayerLoop;
 [assembly: SecurityPermission(SecurityAction.RequestMinimum, SkipVerification = true)]
 [assembly: HG.Reflection.SearchableAttribute.OptIn]
 [assembly: HG.Reflection.SearchableAttribute.OptInAttribute]
 [module: UnverifiableCode]
-#pragma warning disable CS0618 // Type or member is obsolete
-#pragma warning restore CS0618 // Type or member is obsolete
+#pragma warning disable CS0618
+#pragma warning restore CS0618
 namespace DemomanRor2
 {
     [BepInPlugin(ModGuid, ModName, ModVer)]
@@ -67,20 +44,11 @@ namespace DemomanRor2
         public const string ModGuid = "com.brynzananas.demoman";
         public const string ModName = "Demoman";
         public const string ModVer = "1.0.0";
+        
+        private static bool emotesEnabled;
         public static PluginInfo PInfo { get; private set; }
         public static AssetBundle ThunderkitAssets;
-        public static AssetBundle UnityAssets;
         public static BepInEx.Logging.ManualLogSource ModLogger;
-
-        public static Dictionary<string, string> ShaderLookup4 = new Dictionary<string, string>()
-        {
-            {"stubbedror2/base/shaders/hgstandard", "shaders/deferred/hgstandard"},
-            {"stubbedror2/base/shaders/hgintersectioncloudremap", "shaders/fx/hgintersectioncloudremap" },
-            {"stubbedror2/base/shaders/hgcloudremap", "shaders/fx/hgcloudremap" },
-            {"stubbedror2/base/shaders/hgdistortion", "shaders/fx/hgdistortion" },
-            {"stubbedror2/base/shaders/hgsnowtopped", "shaders/deferred/hgsnowtopped" },
-            {"stubbedror2/base/shaders/hgsolidparallax", "shaders/fx/hgsolidparallax" }
-        };
 
         public void Awake()
         {
@@ -105,21 +73,16 @@ namespace DemomanRor2
                     material.shader = replacementShader;
                     if (shaderName == "RoR2/Base/Shaders/HGCloudRemap.shader")
                     {
-                        //material.SetTexture(shaderName, texture2D);
                     }
                     
                 }
-                //var replacementShader = Resources.Load<Shader>(ShaderLookup4[material.shader.name.ToLower()]);
-                //if (replacementShader)
-                //{
-                //    material.shader = replacementShader;
-                //}
             }
             foreach (SkillFamily skillFamily in ThunderkitAssets.LoadAllAssets<SkillFamily>())
             {
                 (skillFamily as ScriptableObject).name = (skillFamily as UnityEngine.Object).name;
                 ContentAddition.AddSkillFamily(skillFamily);
             }
+            emotesEnabled = BepInEx.Bootstrap.Chainloader.PluginInfos.ContainsKey(EmoteCompatAbility.customEmotesApiGUID);
             CreateAssets();
             CreateSurvivor();
             CreateSounds();
@@ -143,11 +106,12 @@ namespace DemomanRor2
             //IL.RoR2.CharacterBody.RecalculateStats += CharacterBody_RecalculateStats;
             //On.RoR2.CharacterModel.UpdateMaterials += CharacterModel_UpdateMaterials;
             On.RoR2.GlobalEventManager.IsImmuneToFallDamage += GlobalEventManager_IsImmuneToFallDamage;
+            
         }
 
         private bool GlobalEventManager_IsImmuneToFallDamage(On.RoR2.GlobalEventManager.orig_IsImmuneToFallDamage orig, GlobalEventManager self, CharacterBody body)
         {
-            if (BodyCatalog.GetBodyName(body.bodyIndex) == "DemoBody") return true;
+            if (body.skillLocator && body.skillLocator.FindSkillByDef(ManthreadsSkillDef)) return true;
             return orig(self, body);
         }
 
@@ -333,6 +297,7 @@ namespace DemomanRor2
                         } while (footL.Find("DemoSmokeFeet"));
                     }
                 }
+                if (self.characterMotor) self.characterMotor.disableAirControlUntilCollision = false;
             }
         }
         private void CharacterBody_OnBuffFirstStackGained(On.RoR2.CharacterBody.orig_OnBuffFirstStackGained orig, CharacterBody self, BuffDef buffDef)
@@ -546,24 +511,39 @@ namespace DemomanRor2
 
         private void CharacterBody_OnKilledOtherServer(On.RoR2.CharacterBody.orig_OnKilledOtherServer orig, CharacterBody self, DamageReport damageReport)
         {
-            CharacterBody attackerBody = damageReport.attackerBody;
-            bool validForUpgrade = self && (self.isChampion || self.isBoss) ? self.HasBuff(UpgradeOnKill) : false;
-            Debug.Log("valid: " + validForUpgrade);
-            Debug.Log(self);
-            Debug.Log(self?.isChampion);
-            Debug.Log(self?.isBoss);
-            Debug.Log(self.HasBuff(UpgradeOnKill));
-            bool victimZatoichi = self.HasBuff(HealOnKill);
-            bool attackerZatoichi = attackerBody ? attackerBody.HasBuff(HealOnKill) : false;
+            CharacterBody victimBody = damageReport.victimBody;
+            Vector3 victimPosition = victimBody.mainHurtBox.transform.position;
+            bool validForUpgrade = victimBody && (victimBody.isChampion || victimBody.isBoss) ? victimBody.HasBuff(UpgradeOnKill) : false;
+            bool victimZatoichi = victimBody ? victimBody.HasBuff(HealOnKill) : false;
+            bool attackerZatoichi = self ? self.HasBuff(HealOnKill) : false;
             orig(self, damageReport);
-            if (attackerBody && validForUpgrade)
+            if (victimBody && validForUpgrade)
             {
-                attackerBody.inventory.GiveItem(RoR2Content.Items.ShinyPearl);
+                DeathRewards deathRewards = victimBody.GetComponent<DeathRewards>();
+                PickupIndex pickupIndex = PickupIndex.none;
+                if (deathRewards)
+                {
+                    if (deathRewards.bossDropTable)
+                    {
+                        pickupIndex = deathRewards.bossDropTable.GenerateDrop(Run.instance.bossRewardRng);
+                    }
+                    else
+                    {
+                        pickupIndex = PickupCatalog.itemIndexToPickupIndex[((int)RoR2Content.Items.ShinyPearl.itemIndex)];
+                    }
+                    
+                }
+                else
+                {
+                    pickupIndex = PickupCatalog.itemIndexToPickupIndex[((int)RoR2Content.Items.ShinyPearl.itemIndex)];
+                }
+
+                PickupDropletController.CreatePickupDroplet(pickupIndex, victimPosition, Physics.gravity * -1f);
             }
             if (victimZatoichi && attackerZatoichi)
             {
-                HealthComponent healthComponent = attackerBody.healthComponent;
-                Overheal(healthComponent, 0.3f);
+                HealthComponent healthComponent = self.healthComponent;
+                Overheal(healthComponent, 0.15f);
             }
 
         }
@@ -592,8 +572,10 @@ namespace DemomanRor2
         public static GameObject SwingEffect;
         public static GameObject SpinEffect;
         public static GameObject ArmedEffect;
-        public static Sprite hudStickyMeter;
-        public static Sprite hudBaseMeter;
+        public static Sprite StickyIndicator;
+        public static Sprite SwordIndicator;
+        public static Sprite ShieldIndicator;
+        public static Sprite DetonateIndicator;
         public static BuffDef AddBuff(string name, bool canStack, bool isDebuff, bool isCooldown, bool isHidden, bool ignoreGrowthNectar, Sprite sprite = null)
         {
             BuffDef buff = ScriptableObject.CreateInstance<BuffDef>();
@@ -627,9 +609,9 @@ namespace DemomanRor2
         }
         private static void CreateAssets()
         {
-            Main.ExtraCritChance = Main.AddBuff("ExtraCritChance", true, false, false, false, false);//, RoR2Content.Buffs.FullCrit.iconSprite);
+            Main.ExtraCritChance = Main.AddBuff("ExtraCritChance", true, false, false, false, false, ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Buffs/DemoSkullcutterBuff.png"));//, RoR2Content.Buffs.FullCrit.iconSprite);
             Main.HealOnKill = Main.AddBuff("HealOnKill", false, false, false, true, false);//, RoR2Content.Buffs.HealingDisabled.iconSprite);
-            Main.ExtraSwordDamage = Main.AddBuff("ExtraSwordDamagePrepare", true, false, false, true, false);
+            //Main.ExtraSwordDamage = Main.AddBuff("ExtraSwordDamagePrepare", true, false, false, true, false);
             Main.ExtraSwordDamage = Main.AddBuff("ExtraSwordDamage", true, false, false, true, false);
             Stomped = AddBuff("Stomped", false, true, false, true, true);
             LockedIn = AddBuff("LockedIn", true, false, false, false, false);
@@ -637,8 +619,10 @@ namespace DemomanRor2
             UpgradeOnKill = AddBuff("UpgradeOnKill", false, false, false, true, false);
             SmokeEffect = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/SmokingEffect.prefab");
             SmokeEffect.AddComponent<DontRotate>();
-            hudBaseMeter = ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/UI/DemoSwordIndicator.png");
-            hudStickyMeter = ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/UI/DemoStickyIndicator.png");
+            SwordIndicator = ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/UI/DemoSwordIndicatorThin.png");
+            StickyIndicator = ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/UI/DemoStickyIndicatorThin.png");
+            DetonateIndicator = ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/UI/DemoDetonateIndicatorThin.png");
+            ShieldIndicator = ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/UI/DemoShieldIndicatorThin.png");
             SwingEffect = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/SwortSwing.prefab");
             SpinEffect = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/SpecialSwing.prefab");
             SpinEffect.AddComponent<SpecialSwordSpiner>();
@@ -681,11 +665,7 @@ namespace DemomanRor2
             GameObject explosionVFX = Addressables.LoadAssetAsync<GameObject>("RoR2/Base/Toolbot/OmniExplosionVFXToolbotQuick.prefab").WaitForCompletion();
             foreach (GameObject projectile in projectiles)
             {
-                DemoExplosionComponent rocketjumpComponent = projectile.GetComponent<DemoExplosionComponent>();
-                if (!rocketjumpComponent)
-                {
-                    projectile.AddComponent<DemoExplosionComponent>();
-                }
+                
                 ProjectileImpactExplosion projectileImpactExplosion = projectile.GetComponent<ProjectileImpactExplosion>();
                 if (projectileImpactExplosion && projectileImpactExplosion.impactEffect == null)
                 {
@@ -700,13 +680,32 @@ namespace DemomanRor2
                     sphereCollider.isTrigger = true;
                     sphereCollider.radius = 0.5f;
                 }
+                DemoExplosionComponent rocketjumpComponent = projectile.GetComponent<DemoExplosionComponent>();
+                if (!rocketjumpComponent && projectileImpactExplosion)
+                {
+                    projectile.AddComponent<DemoExplosionComponent>();
+                }
                 PrefabAPI.RegisterNetworkPrefab(projectile);
                 ContentAddition.AddProjectile(projectile);
             }
         }
         private static void CreateSurvivor()
         {
-            DemoBody = Main.ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/DemomanBody.prefab");
+            DemoBody = Main.ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/DemolisherBody.prefab");
+            LanguageAPI.Add("DEMOLISHER_BODY_NAME", "Demolisher");
+            LanguageAPI.Add("DEMOLISHER_BODY_SUBTITLE", "Reborn Demon");
+            LanguageAPI.Add("DEMOLISHER_NAME", "Demolisher");
+            LanguageAPI.Add("DEMOLISHER_DESC", "Demolisher is a powerfull character that can switch between melee and ranged styleы at any moment. To switch styles, hold Utility button and click Secondary button.\n" +
+                "\n" +
+                "<style=cSub>\r\n\r\n< ! > Passive allows Demolisher for harmless landing. His explosives have knockback that can be used as a quick position relocation." +
+                "\r\n\r\n< ! > Swords have small radius of attack, so you mast aim at the target you want to hit. They compensate it with their high burst damage and strong effects." +
+                "\r\n\r\n< ! > In ranged style swords are replaced with trap bomb launchers. On impact they stick to the surface and wait for user input for detonation signal." +
+                "\r\n\r\n< ! > Grenades are awailable for both styles and are a quick way of dealing with targets on distance." +
+                "\r\n\r\n< ! > Shield charge is a great movement skill while also having attack capabilities of increasing sword damage. Shield charge is cancelled upon sword attack, but retains damage increase for a short time." +
+                "\r\n\r\n< ! > In ranged style shield charge is replaced with traps detonation. Traps require time to be armed for detonation and have time before explosion after detonation request." +
+                "\r\n\r\n< ! > Specials can utilise primary selection and base their effects from them.");
+            LanguageAPI.Add("DEMOLISHER_OUTRO_FLAVOR", "And so he left... remembering who he was...");
+            LanguageAPI.Add("DEMOLISHER_OUTRO_FAILURE", "If he was a good Demolisher... maybe he could escape...");
             CharacterBody demoCharacterBody = DemoBody.GetComponent<CharacterBody>();
             demoCharacterBody.preferredPodPrefab = Addressables.LoadAssetAsync<GameObject>("RoR2/Base/SurvivorPod/SurvivorPod.prefab").WaitForCompletion();
             demoCharacterBody._defaultCrosshairPrefab = Addressables.LoadAssetAsync<GameObject>("RoR2/Base/UI/StandardCrosshair.prefab").WaitForCompletion();
@@ -721,25 +720,20 @@ namespace DemomanRor2
             GameObject hudObject = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/DemoExtraCrosshair.prefab");
             hudObject.transform.localScale = new Vector3(-1f, 1f, 1f);
             component.chargeMeter = hudObject;
-            component.altCrosshair = Addressables.LoadAssetAsync<GameObject>("RoR2/Base/Toolbot/ToolbotGrenadeLauncherCrosshair.prefab").WaitForCompletion();
+            component.altCrosshair = Addressables.LoadAssetAsync<GameObject>("RoR2/Base/UI/StandardCrosshair.prefab").WaitForCompletion();
             InteractionDriver interactionDriver = DemoBody.GetComponent<InteractionDriver>();
             EntityStateMachine entityStateMachine = DemoBody.GetComponent<EntityStateMachine>();
             entityStateMachine.mainStateType = new SerializableEntityStateType(typeof(DemoCharacterMain));
             //DemoBody.GetComponent<CharacterCameraParams>().data = Addressables.LoadAssetAsync<CharacterCameraParams>("RoR2/Base/Common/ccpStandard.asset").WaitForCompletion().data;
             BodyCatalog.getAdditionalEntries += BodyCatalog_getAdditionalEntries;
             SurvivorCatalog.getAdditionalSurvivorDefs += SurvivorCatalog_getAdditionalSurvivorDefs;
-            if (true)
+            if (emotesEnabled)
             {
-                string path = "Assets/Demoman/DemoEmotes.prefab";
-                var skele = Main.ThunderkitAssets.LoadAsset<GameObject>(path);
-                CustomEmotesAPI.ImportArmature(DemoBody, skele);
-                skele.GetComponentInChildren<BoneMapper>().scale = 1f;
-                skele.transform.localPosition = new Vector3(0f, -0f, 0f);
-                skele.transform.localRotation = Quaternion.identity;
-                CustomEmotesAPI.animChanged += CustomEmotesAPI_animChanged;
+                EmoteCompatAbility.EmoteCompatability();
             }
 
         }
+        
         public static DemoSoundClass DemoChargeHitFleshSound = new DemoSoundClass("DemoChargeFleshHit");
         public static DemoSoundClass DemoChargeWindUpSound = new DemoSoundClass("DemoChargeWindUp");
         public static DemoSoundClass DemoChargeWorldHitSound = new DemoSoundClass("DemoChargeWorldHit");
@@ -784,75 +778,8 @@ namespace DemomanRor2
             private NetworkSoundEventDef playSound;
             private NetworkSoundEventDef stopSound;
         }
-        private static void CustomEmotesAPI_animChanged(string newAnimation, BoneMapper mapper)
-        {
-            if (mapper.transform.name == "DemoEmotes")
-            {
-                ChildLocator childLocator = mapper.transform.parent.GetComponent<ChildLocator>();
-                ChildLocator childLocator2 = mapper.GetComponent<ChildLocator>();
-                Transform smokes = childLocator.FindChild("Smokes");
-                Transform smokes2 = childLocator2.FindChild("Smokes");
-                Transform weaponR = childLocator.FindChild("WeaponR");
-                Transform weaponL = childLocator.FindChild("WeaponL");
-                Transform shield = childLocator.FindChild("Shield");
-                if (newAnimation != "none")
-                {
-                    smokes2.gameObject.SetActive(true);
-                    smokes.gameObject.SetActive(false);
-                    //smokes.SetParent(childLocator2.FindChild("Head"));
-                    weaponR.gameObject.SetActive(false);
-                    weaponL.gameObject.SetActive(false);
-                    shield.gameObject.SetActive(false);
-                    //smokes.localPosition = Vector3.zero;
-                    //smokes.localRotation = Quaternion.identity;
-                    //smokes.localScale = Vector3.one;
+        
 
-                }
-                else
-                {
-                    smokes2.gameObject.SetActive(false);
-                    smokes.gameObject.SetActive(true);
-                    //smokes.SetParent(childLocator.FindChild("Head"));
-                    weaponR.gameObject.SetActive(true);
-                    weaponL.gameObject.SetActive(true);
-                    shield.gameObject.SetActive(true);
-                    //smokes.localPosition = Vector3.zero;
-                    //smokes.localRotation = Quaternion.identity;
-                    //smokes.localScale = Vector3.one;
-
-                }
-            }
-        }
-
-        private static bool setup = false;
-        private static void SurvivorCatalog_Init(On.RoR2.SurvivorCatalog.orig_Init orig)
-        {
-            orig();
-            if (!setup)
-            {
-                setup = true;
-                foreach (var item in SurvivorCatalog.allSurvivorDefs)
-                {
-                    if (item.bodyPrefab.name == "DemomanBody")
-                    {
-                        string path = "Assets/Demoman/DemoEmotes.prefab";
-                        //Debug.Log("Path: " + path);
-
-                        var skele = Main.ThunderkitAssets.LoadAsset<GameObject>(path);
-                        //Debug.Log(skele);
-                        CustomEmotesAPI.ImportArmature(item.bodyPrefab, skele);
-                        skele.GetComponentInChildren<BoneMapper>().scale = 1f;
-                        skele.transform.localPosition = new Vector3(0f, -0f, 0f);
-                        skele.transform.localRotation = Quaternion.identity;
-                    }
-                }
-                //foreach (var item in BodyCatalog.allBodyPrefabs)
-                //{
-                //    var component = item.GetComponent<ExpansionRequirementComponent>();
-                //    if (component) Destroy(component);
-                //}
-            }
-        }
         private static void BodyCatalog_getAdditionalEntries(List<GameObject> obj)
         {
             obj.Add(DemoBody);
@@ -1004,7 +931,7 @@ namespace DemomanRor2
             {
                 HurtBox hurtBox = other.GetComponent<HurtBox>();
                 
-                if (stickyComponent ? !stickyComponent.sticked : true && filter && hurtBox && filter.teamIndex != hurtBox.healthComponent.body.teamComponent.teamIndex)
+                if ((other is MeshCollider ? (other as MeshCollider).convex : true) && stickyComponent ? !stickyComponent.sticked : true && filter && hurtBox && filter.teamIndex != hurtBox.healthComponent.body.teamComponent.teamIndex)
                 {
                     transform.position = other.ClosestPoint(transform.position);
                 }
@@ -1263,6 +1190,7 @@ namespace DemomanRor2
                     }
                     else
                     {
+                        Debug.Log("Not Found");
                         Destroy(this);
                         return;
                     }
@@ -1271,7 +1199,7 @@ namespace DemomanRor2
             }
             public void FixedUpdate()
             {
-                if (currentStateMachine && currentStateMachine.state.GetType() == stateType)
+                if (currentStateMachine && currentStateMachine.state.GetType() == seekerState.stateType)
                 {
                     if (sticked)
                     {
@@ -1286,6 +1214,11 @@ namespace DemomanRor2
                                 {
                                     Vector3 direction = hookedObject.transform.position - stickedBody.transform.position;
                                     stickedBody.characterMotor.velocity = direction * 4;
+                                }
+                                else if (stickedBody.rigidbody)
+                                {
+                                    Vector3 direction = hookedObject.transform.position - stickedBody.transform.position;
+                                    stickedBody.rigidbody.velocity = direction * 4;
                                 }
                             }
                         }
@@ -1318,6 +1251,7 @@ namespace DemomanRor2
                 }
                 else
                 {
+                    Debug.Log("Released");
                     Destroy(this);
                 }
             }
@@ -1444,6 +1378,8 @@ namespace DemomanRor2
             public Image meterImage;
             public Image baseMeter;
             public TextMeshProUGUI stickyText;
+            public TextMeshProUGUI extraPrimaryText;
+            public TextMeshProUGUI extraSecondaryText;
             public GameObject altCrosshair;
             private ChildLocator childLocator;
             private CharacterModel characterModel;
@@ -1461,6 +1397,7 @@ namespace DemomanRor2
             public bool canUseSecondary = true;
             public float canUseSecondaryTimer = 0f;
             public bool useUtility;
+            public EntityStateMachine bodyStateMachine;
             public int stickyCount
             {
                 get
@@ -1513,6 +1450,17 @@ namespace DemomanRor2
                     stickies.Add("All", new List<StickyComponent>());
                 }
                 cameraTargetParams = GetComponent<CameraTargetParams>();
+                EntityStateMachine[] entityStateMachines = GetComponents<EntityStateMachine>();
+                if (entityStateMachines != null)
+                {
+                    foreach(EntityStateMachine entityStateMachine in entityStateMachines)
+                    {
+                        if (entityStateMachine != null && entityStateMachine.customName == "Body")
+                        {
+                            bodyStateMachine = entityStateMachine;
+                        }
+                    }
+                }
             }
             public void OnEnable()
             {
@@ -1619,8 +1567,8 @@ namespace DemomanRor2
                             overrideRequest = CrosshairUtils.RequestOverrideForBody(characterBody, altCrosshair, CrosshairUtils.OverridePriority.Skill);
                         }
                         
-                        baseMeter.sprite = hudStickyMeter;
-                        meterImage.sprite = hudStickyMeter;
+                        baseMeter.sprite = StickyIndicator;
+                        meterImage.sprite = StickyIndicator;
                     }
                     else
                     {
@@ -1628,8 +1576,8 @@ namespace DemomanRor2
                         {
                             overrideRequest.Dispose();
                         }
-                        baseMeter.sprite = hudBaseMeter;
-                        meterImage.sprite = hudBaseMeter;
+                        baseMeter.sprite = SwordIndicator;
+                        meterImage.sprite = SwordIndicator;
                     }
                 }
             }
@@ -1672,6 +1620,14 @@ namespace DemomanRor2
                     {
                         secondaryStopwatch = hudObject.transform.Find("chargeMeterBase/secondaryStopwatchBase/secondaryStopwatch").GetComponent<Image>();
                     }
+                    if (!extraPrimaryText)
+                    {
+                        extraPrimaryText = hudObject.transform.Find("chargeMeterBase/extraPrimaryStocksCount").GetComponent<TextMeshProUGUI>();
+                    }
+                    if (!extraSecondaryText)
+                    {
+                        extraSecondaryText = hudObject.transform.Find("chargeMeterBase/extraSecondaryStocksCount").GetComponent<TextMeshProUGUI>();
+                    }
                     UpdateHudObject();
                 }
                 if (primarystockCounter)
@@ -1683,6 +1639,16 @@ namespace DemomanRor2
                         {
                             primarystockCounter.GetChild(i).gameObject.SetActive(stocks > 0 ? true : false);
                             stocks--;
+                        }
+                        if (stocks > 0)
+                        {
+                            extraPrimaryText.gameObject.SetActive(true);
+                            extraPrimaryText.text = stocks.ToString();
+                        }
+                        else
+                        {
+                            extraPrimaryText.gameObject.SetActive(false);
+                            extraPrimaryText.text = stocks.ToString();
                         }
                     }
                 }
@@ -1698,6 +1664,16 @@ namespace DemomanRor2
                         {
                             secondarystockCounter.GetChild(i).gameObject.SetActive(stocks > 0 ? true : false);
                             stocks--;
+                        }
+                        if (stocks > 0)
+                        {
+                            extraSecondaryText.gameObject.SetActive(true);
+                            extraSecondaryText.text = stocks.ToString();
+                        }
+                        else
+                        {
+                            extraSecondaryText.gameObject.SetActive(false);
+                            extraSecondaryText.text = stocks.ToString();
                         }
                     }
                     if (primaryStopwatch && trackPrimary)
@@ -1718,22 +1694,6 @@ namespace DemomanRor2
                 if (meterImage && trackUtility && updateMeter)
                 {
                     meterImage.fillAmount = 1 - ((trackUtility.finalRechargeInterval - trackUtility.rechargeStopwatch) / trackUtility.finalRechargeInterval);
-                }
-                if (primaryReplace)
-                {
-                    primaryReplace.RunRecharge(Time.fixedDeltaTime);
-                }
-                if (secondaryReplace)
-                {
-                    secondaryReplace.RunRecharge(Time.fixedDeltaTime);
-                }
-                if (specialReplace)
-                {
-                    specialReplace.RunRecharge(Time.fixedDeltaTime);
-                }
-                if (utilityReplace)
-                {
-                    utilityReplace.RunRecharge(Time.fixedDeltaTime);
                 }
 
             }
@@ -1758,9 +1718,6 @@ namespace DemomanRor2
                         {
                             cooldown = skillLocator.secondary.rechargeStopwatch;
                             stock = skillLocator.secondary.stock;
-                            //GenericSkill skill1 = skillLocator.utility;
-                            //skillLocator.utility = utilityReplace;
-                            //utilityReplace = skill1;
                             skillLocator.secondary.SetSkillOverride(this, SwapSkillDef, GenericSkill.SkillOverridePriority.Contextual);
                         }
 
@@ -1780,15 +1737,13 @@ namespace DemomanRor2
                             }
                         if (switchOff)
                         {
-                            //GenericSkill skill1 = skillLocator.utility;
-                            //skillLocator.utility = utilityReplace;
-                            //utilityReplace = skill1;
                             skillLocator.secondary.UnsetSkillOverride(this, SwapSkillDef, GenericSkill.SkillOverridePriority.Contextual);
                             skillLocator.secondary.stock = stock;
                             skillLocator.secondary.rechargeStopwatch = cooldown;
                         }
                         if (canUseUtilityTimer <= 0)
                         {
+                            if (bodyStateMachine && bodyStateMachine.state.GetType() == bodyStateMachine.mainStateType.stateType)
                             skillLocator.utility.ExecuteIfReady();
                         }
                         canUseUtility = true;
@@ -1981,16 +1936,6 @@ namespace DemomanRor2
                     projectileImpactExplosion.stopwatch = 0f;
                     projectileImpactExplosion.lifetime = time;
                 }
-                //EffectData effectData = new EffectData
-                //{
-                //    scale = 1f,
-                //    rotation = Quaternion.identity,
-                //    origin = transform.position,
-
-                //};
-
-                //GameObject.Instantiate(armedVFX, transform);
-                //EffectManager.SpawnEffect(armedVFX, effectData, true);
                 GetOrCreateListOfStickies().Remove(this);
             }
             public virtual void FixedUpdate()
@@ -2186,7 +2131,7 @@ namespace DemomanRor2
                 rigidbody = GetComponent<Rigidbody>();
                 ghost = controller.ghost.transform.GetChild(0);
             }
-            private void FixedUpdate()
+            private void LateUpdate()
             {
                 if (rigidbody.velocity != Vector3.zero)
                     ghost.rotation = Quaternion.LookRotation(rigidbody.velocity.normalized);
@@ -2345,7 +2290,7 @@ namespace DemomanRor2
                 if (hitInfo.hitHurtBox)
                 {
                     CharacterBody ownerBody = bulletAttack.owner.GetComponent<CharacterBody>();
-                    Main.Overheal(ownerBody.healthComponent, 0.1f);
+                    Main.Overheal(ownerBody.healthComponent, 0.04f);
                     ownerBody.AddTimedBuff(Main.HealOnKill, 0.2f);
                     CharacterBody body = hitInfo.hitHurtBox.hurtBoxGroup.transform.GetComponent<CharacterModel>().body;
                     if (body)
@@ -2374,7 +2319,7 @@ namespace DemomanRor2
                 hitCallback = CaberOnHit
 
             };
-            Caber = new DemoSwordClass(CaberBulletAttack, swordObject: ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/Weapons/Swords/caber.prefab"));
+            Caber = new DemoSwordClass(CaberBulletAttack, 0.2f, 0.4f, swordObject: ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/Weapons/Swords/caber.prefab"));
             bool CaberOnHit(BulletAttack bulletAttack, ref BulletAttack.BulletHit hitInfo)
             {
                 CharacterBody ownerBody = bulletAttack.owner.GetComponent<CharacterBody>();
@@ -2471,46 +2416,50 @@ namespace DemomanRor2
             }
             EyelanderSkillDef = SwordInit(Eyelander, typeof(DemoSword), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoEyelanderSkillIcon.png"), "DemoEyelander", "DEMOMAN_EYELANDER_NAME", "DEMOMAN_EYELANDER_DESC");
             LanguageAPI.Add("DEMOMAN_EYELANDER_NAME", "Eyelander");
-            GenerateSwordDescriptionToken("DEMOMAN_EYELANDER_DESC", Eyelander, "Eyelander is a weak sword, but generates Shiny Pearl on champion kill",
-            "On hit: Heal for 4% of the maximum health\n" +
-            "On kill: Heal for 15% of the maximum health");
+            GenerateSwordDescriptionToken("DEMOMAN_EYELANDER_DESC", Eyelander, "Eyelander is a weakaning sword, but generates Boss Reward on champion kill", "Passive: Reduces base damage and health by 25%. Reduces movement speed by 1m/s");
 
             LanguageAPI.Add("DEMOMAN_DEFLECTOR_NAME", "Deflector");
             LanguageAPI.Add("DEMOMAN_DEFLECTOR_DESC", $"Feedbacker.");
             PillLauncherSkillDef = GrenadeLauncherInit(typeof(PillLauncher), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoPillSkillIcon.png"), "DemoPillLauncher", "DEMOMAN_PILLLAUNCHER_NAME", "DEMOMAN_PILLLAUNCHER_DESC", false, 4, 4, 1, 4, 1);
-            RocketLauncherSkillDef = GrenadeLauncherInit(typeof(RocketLauncher), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoRocketSkillIcon.png"), "DemoRocketLauncher", "DEMOMAN_ROCKETLAUNCHER_NAME", "DEMOMAN_ROCKETLAUNCHER_DESC", false, 4, 4, 1, 4, 1);
+            RocketLauncherSkillDef = GrenadeLauncherInit(typeof(RocketLauncher), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoRocketSkillIcon.png"), "DemoRocketLauncher", "DEMOMAN_ROCKETLAUNCHER_NAME", "DEMOMAN_ROCKETLAUNCHER_DESC", false, 3, 4, 1, 3, 1);
             BombLauncherSkillDef = GrenadeLauncherInit(typeof(BombLauncher), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoBombSkillIcon.png"), "DemoBombLauncher", "DEMOMAN_BOMBLAUNCHER_NAME", "DEMOMAN_BOMBLAUNCHER_DESC", false, 4, 4, 1, 4, 1);
             BombProjectile.GetComponent<BombComponent>().seekerState = BombLauncherSkillDef.activationState;
             StickyLauncherSkillDef = GrenadeLauncherInit(typeof(StickyLauncher), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoStickySkillIcon.png"), "DemoStickyLauncher", "DEMOMAN_STICKYLAUNCHER_NAME", "DEMOMAN_STICKYLAUNCHER_DESC", true, 8, 1, 1);
-            JumperLauncherSkillDef = GrenadeLauncherInit(typeof(JumperLauncher), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoJumperStickySkillIcon.png"), "DemoJumperLauncher", "DEMOMAN_STICKYLAUNCHER_NAME", "DEMOMAN_STICKYLAUNCHER_DESC", true, 10, 1, 1);
-            HookLauncherSkillDef = GrenadeLauncherInit(typeof(HookLauncher), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoHookSkillIcon.png"), "DemoHookLauncher", "DEMOMAN_ROCKETLAUNCHER_NAME", "DEMOMAN_ROCKETLAUNCHER_DESC", false, 1, 2, 1, 1, 1);
+            JumperLauncherSkillDef = GrenadeLauncherInit(typeof(JumperLauncher), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoJumperStickySkillIcon.png"), "DemoJumperLauncher", "DEMOMAN_JUMPERLAUNCHER_NAME", "DEMOMAN_JUMPERLAUNCHER_DESC", true, 8, 1, 1);
+            HookLauncherSkillDef = GrenadeLauncherInit(typeof(HookLauncher), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoHookSkillIcon.png"), "DemoHookLauncher", "DEMOMAN_HOOKLAUNCHER_NAME", "DEMOMAN_HOOKLAUNCHER_DESC", false, 1, 6, 1, 1, 1);
             HookProjectile.GetComponent<HookComponent>().seekerState = HookLauncherSkillDef.activationState;
             //NukeLauncherSkillDef = GrenadeLauncherInit(typeof(NukeLauncher), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoNukeSkillIcon.png"), "DemoNukeLauncher", "DEMOMAN_ROCKETLAUNCHER_NAME", "DEMOMAN_ROCKETLAUNCHER_DESC", false, 1, 60, 1, 1, 1);
 
             //QuickiebombLauncherSkillDef = GrenadeLauncherInit(typeof(QuickiebombLauncher), "DEMOMAN_QUICKIEBOMBLAUNCHER_NAME", "DEMOMAN_QUICKIEBOMBLAUNCHER_DESC", true, 4, 1, 1);
-            MineLayerSkillDef = GrenadeLauncherInit(typeof(MineLayer), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoMineSkillIcon.png"), "DemoMineLayer", "DEMOMAN_MINELAYER_NAME", "DEMOMAN_MINELAYER_DESC", true, 3, 1, 1);
+            MineLayerSkillDef = GrenadeLauncherInit(typeof(MineLayer), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoMineSkillIcon.png"), "DemoMineLayer", "DEMOMAN_MINELAYER_NAME", "DEMOMAN_MINELAYER_DESC", true, 8, 1, 1);
             LanguageAPI.Add("DEMOMAN_MINELAYER_NAME", "Mine Layer");
-            LanguageAPI.Add("DEMOMAN_MINELAYER_DESC", $"Mines!.");
+            GenerateGrenadeDescriptionToken("DEMOMAN_MINELAYER_DESC", MineProjectile, MineLayerSkillDef, new MineLayer(), "Mines detonate automatically on enemy contact.");
             AntigravLauncherSkillDef = GrenadeLauncherInit(typeof(AntigravLauncher), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoAntigravBombSkillIcon.png"), "DemoAntigravityBombLauncher", "DEMOMAN_QUICKIEBOMBLAUNCHER_NAME", "DEMOMAN_QUICKIEBOMBLAUNCHER_DESC", true, 4, 1, 1);
             LanguageAPI.Add("DEMOMAN_PILLLAUNCHER_NAME", "Grenade Launcher");
-            GenerateGrenadeDescriptionToken("DEMOMAN_PILLLAUNCHER_DESC", PillProjectile, PillLauncherSkillDef, new PillLauncher());
+            GenerateGrenadeDescriptionToken("DEMOMAN_PILLLAUNCHER_DESC", PillProjectile, PillLauncherSkillDef, new PillLauncher(), "Classic choice.");
             LanguageAPI.Add("DEMOMAN_ROCKETLAUNCHER_NAME", "Rocket Launcher");
-            GenerateGrenadeDescriptionToken("DEMOMAN_ROCKETLAUNCHER_DESC", RocketProjectile, RocketLauncherSkillDef, new RocketLauncher());
+            GenerateGrenadeDescriptionToken("DEMOMAN_ROCKETLAUNCHER_DESC", RocketProjectile, RocketLauncherSkillDef, new RocketLauncher(), "Rockets explode on contact.");
+            LanguageAPI.Add("DEMOMAN_HOOKLAUNCHER_NAME", "Hook Launcher");
+            GenerateGrenadeDescriptionToken("DEMOMAN_HOOKLAUNCHER_DESC", HookProjectile, HookLauncherSkillDef, new HookLauncher(), "Trades damaging projectiles with a grapple hook. Grapple hook can pickup and throw enemies");
             //LanguageAPI.Add("DEMOMAN_ROCKETLAUNCHER_DESC", $"Fire your head cannon.");
             LanguageAPI.Add("DEMOMAN_BOMBLAUNCHER_NAME", "Bomb Cannon");
-            GenerateGrenadeDescriptionToken("DEMOMAN_BOMBLAUNCHER_DESC", BombProjectile, BombLauncherSkillDef, new BombLauncher());
+            GenerateGrenadeDescriptionToken("DEMOMAN_BOMBLAUNCHER_DESC", BombProjectile, BombLauncherSkillDef, new BombLauncher(), "Bombs deal immediate contact damage and push the target on hit. Bombs lifetime scale with charge");
             //LanguageAPI.Add("DEMOMAN_BOMBLAUNCHER_DESC", $"Fire your head cannon.");
             LanguageAPI.Add("DEMOMAN_STICKYLAUNCHER_NAME", "Sticky Launcher");
-            GenerateGrenadeDescriptionToken("DEMOMAN_STICKYLAUNCHER_DESC", StickyProjectile, StickyLauncherSkillDef, new StickyLauncher());
+            GenerateGrenadeDescriptionToken("DEMOMAN_STICKYLAUNCHER_DESC", StickyProjectile, StickyLauncherSkillDef, new StickyLauncher(), "Classic choice");
+            LanguageAPI.Add("DEMOMAN_JUMPERLAUNCHER_NAME", "Jumper Launcher");
+            GenerateGrenadeDescriptionToken("DEMOMAN_JUMPERLAUNCHER_DESC", JumperProjectile, JumperLauncherSkillDef, new JumperLauncher(), "Trades all damage for knockback. Explosions stun enemies");
             //LanguageAPI.Add("DEMOMAN_STICKYLAUNCHER_DESC", $"Fire your sticky launcher.");
-            LanguageAPI.Add("DEMOMAN_QUICKIEBOMBLAUNCHER_NAME", "Quickiebomb Launcher");
-            GenerateGrenadeDescriptionToken("DEMOMAN_QUICKIEBOMBLAUNCHER_DESC", AntigravProjectile, AntigravLauncherSkillDef, new AntigravLauncher());
+            LanguageAPI.Add("DEMOMAN_QUICKIEBOMBLAUNCHER_NAME", "Antigrav Launcher");
+            GenerateGrenadeDescriptionToken("DEMOMAN_QUICKIEBOMBLAUNCHER_DESC", AntigravProjectile, AntigravLauncherSkillDef, new AntigravLauncher(), "UNFINISHED. Unique explosion is planned");
             //LanguageAPI.Add("DEMOMAN_QUICKIEBOMBLAUNCHER_DESC", $"Fire your quickiebomb launcher.");
             HeavyShieldSkillDef = ShieldChargeInit(typeof(ShieldChargeHeavy), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoHeavyShieldSkillIcon.png"), "DemoHeavyShield", "DEMOMAN_SHIELDHEAVY_NAME", "DEMOMAN_SHIELDHEAVY_DESC");
-            LightShieldSkillDef = ShieldChargeInit(typeof(ShieldChargeLight), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoLightShieldSkillIcon.png"), "DemoHeavyShield", "DEMOMAN_SHIELDHEAVY_NAME", "DEMOMAN_SHIELDHEAVY_DESC");
+            LightShieldSkillDef = ShieldChargeInit(typeof(ShieldChargeLight), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoLightShieldSkillIcon.png"), "DemoHeavyShield", "DEMOMAN_SHIELDLIGHT_NAME", "DEMOMAN_SHIELDLIGHT_DESC");
             //SpaceShield = ShieldChargeInit(typeof(ShieldChargeAntigravity), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoHookSkillIcon.png"), "DemoFlyingShield", "DEMOMAN_SHIELDANTIGRAVITY_NAME", "DEMOMAN_SHIELDANTIGRAVITY_DESC");
             LanguageAPI.Add("DEMOMAN_SHIELDHEAVY_NAME", "Heavy Shield");
-            LanguageAPI.Add("DEMOMAN_SHIELDHEAVY_DESC", $"charge.");
+            LanguageAPI.Add("DEMOMAN_SHIELDHEAVY_DESC", $"DESCRIPTION TO BE FINISHED. In short: gives 25 armor passively, 100 armour on charge. Has less turning control. Green stage: 0% extra sword damage. Yellow stage: 35% extra sword damage. Red stage: 300% extra sword damage");
+            LanguageAPI.Add("DEMOMAN_SHIELDLIGHT_NAME", "Light Shield");
+            LanguageAPI.Add("DEMOMAN_SHIELDLIGHT_DESC", $"DESCRIPTION TO BE FINISHED. In short: gives no armor. Has full turning control. Only has green and yellow stages");
             LanguageAPI.Add("DEMOMAN_SHIELDANTIGRAVITY_NAME", "Antigravity Shield");
             LanguageAPI.Add("DEMOMAN_SHIELDANTIGRAVITY_DESC", $"charge.");
             DetonateSkillDef = DetonateInit();
@@ -2519,20 +2468,24 @@ namespace DemomanRor2
             SwapSkillDef = Swap(ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoSwapSKillIcon.png"));
             SpecialOneSkillDef = SpecialInit(typeof(SpecialOneRedirector), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoSpecial1SKillIcon.png"), "DemoSwordTornado", "DEMOMAN_SPECIALONE_NAME", "DEMOMAN_SPECIALONE_DESC", "Extra");
             //AltSpecialOneSkillDef = AltSpecialInit(SpecialOneSkillDef, typeof(SpecialOneSticky), SpecialOneSkillDef.icon, "DemoBombTornado", "DEMOMAN_SPECIALONEALT_NAME", "DEMOMAN_SPECIALTWOALT_DESC", "Extra");
-            SpecialTwoSkillDef = SpecialInit(typeof(UltraInstinctRedirect), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoSpecial2SKillIcon.png"), "DemoSwordStorm", "DEMOMAN_SPECIALONE_NAME", "DEMOMAN_SPECIALTWO_DESC", "Body");
+            SpecialTwoSkillDef = SpecialInit(typeof(UltraInstinctRedirect), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoSpecial2SKillIcon.png"), "DemoSwordStorm", "DEMOMAN_SPECIALTWO_NAME", "DEMOMAN_SPECIALTWO_DESC", "Extra");
             //AltSpecialTwoSkillDef = AltSpecialInit(SpecialTwoSkillDef, typeof(UltraInstinctSticky), SpecialTwoSkillDef.icon, "DemoBombStorm", "DEMOMAN_SPECIALTWOALT_NAME", "DEMOMAN_SPECIALTWOALT_DESC", "Extra");
             SlamSkillDef = SpecialInit(typeof(Slam), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoSlamSkillIcon.png"), "DemoSlam", "DEMOMAN_SLAM_NAME", "DEMOMAN_SLAM_DESC", "Extra");
             //LockInSkillDef = SpecialInit(typeof(LockIn), null, "DemoLockIn", "DEMOMAN_LOCKIN_NAME", "DEMOMAN_LOCKIN_DESC", "Extra");
-            LanguageAPI.Add("DEMOMAN_SPECIALONE_NAME", "Tornado");
-            LanguageAPI.Add("DEMOMAN_SPECIALONE_DESC", $"Swor.");
+            LanguageAPI.Add("DEMOMAN_SPECIALONE_NAME", "Whirlwind");
+            LanguageAPI.Add("DEMOMAN_SPECIALONE_DESC", $"Sword style: Enter a whirlwind state where you hit all enemies withtin sword range every " + LangueagePrefix("0.25", LanguagePrefixEnum.Damage) + " seconds. Sword statistics retained." +
+                "\nRanged style: Quickly fire traps. Trap statistics retained");
             //LanguageAPI.Add("DEMOMAN_SPECIALONEALT_NAME", "Trap Barrage");
             //LanguageAPI.Add("DEMOMAN_SPECIALONEALT_DESC", $"Stick.");
             LanguageAPI.Add("DEMOMAN_SPECIALTWO_NAME", "Hit Storm");
-            LanguageAPI.Add("DEMOMAN_SPECIALTWO_DESC", $"Swor.");
+            LanguageAPI.Add("DEMOMAN_SPECIALTWO_DESC", $"Hit all enemies within 24 meters radius. Left stocks will be used to hit them again if there are any left.");
+            LanguageAPI.Add("DEMOMAN_SLAM_NAME", "Slam");
+            LanguageAPI.Add("DEMOMAN_SLAM_DESC", $"UNFINISHED. Quickly slam down. On impact launch all enemies within 12 meters radius up. Pressing Jump buttom after landing will launch you with them.");
             //LanguageAPI.Add("DEMOMAN_SPECIALTWOALT_NAME", "Trap Storm");
             //LanguageAPI.Add("DEMOMAN_SPECIALTWOALT_DESC", $"Stick.");
-            ManthreadsSkillDef = PassiveInit(ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoMannthreadsSkillIcon.png"), "DemoStompPassive", "DEMO_STOMPSKILL_NAME", "DEMO_STOMPSKILL_DESC");
-
+            ManthreadsSkillDef = PassiveInit(ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoMannthreadsSkillIcon.png"), "DemoStompPassive", "DEMOMAN_STOMPSKILL_NAME", "DEMOMAN_STOMPSKILL_DESC");
+            LanguageAPI.Add("DEMOMAN_STOMPSKILL_NAME", "Hell support");
+            LanguageAPI.Add("DEMOMAN_STOMPSKILL_NAME_DESC", $"Negate all fall damage.");
             foreach (var variant in demoStickyFamily.variants)
             {
                 stickySkills.Add(variant.skillDef);
@@ -2822,8 +2775,8 @@ namespace DemomanRor2
         {
             bool wasAdded = false;
             ContentAddition.AddEntityState<DemoSword>(out wasAdded);
-            ContentAddition.AddEntityState<ShieldCharge>(out wasAdded);
-            ContentAddition.AddEntityState<GrenadeLauncher>(out wasAdded);
+            //ContentAddition.AddEntityState<ShieldCharge>(out wasAdded);
+            //ContentAddition.AddEntityState<GrenadeLauncher>(out wasAdded);
             ContentAddition.AddEntityState<PillLauncher>(out wasAdded);
             ContentAddition.AddEntityState<RocketLauncher>(out wasAdded);
             ContentAddition.AddEntityState<StickyLauncher>(out wasAdded);
@@ -2837,16 +2790,15 @@ namespace DemomanRor2
             ContentAddition.AddEntityState<SpecialOneSword>(out wasAdded);
             ContentAddition.AddEntityState<SpecialOneRedirector>(out wasAdded);
             ContentAddition.AddEntityState<UltraInstinctRedirect>(out wasAdded);
-            ContentAddition.AddEntityState<UltraInstinctState>(out wasAdded);
+            //ContentAddition.AddEntityState<UltraInstinctState>(out wasAdded);
             ContentAddition.AddEntityState<UltraInstinctSticky>(out wasAdded);
             ContentAddition.AddEntityState<UltraInstinctSword>(out wasAdded);
             ContentAddition.AddEntityState<Slam>(out wasAdded);
-            ContentAddition.AddEntityState<ShieldCharge>(out wasAdded);
+            //ContentAddition.AddEntityState<ShieldCharge>(out wasAdded);
             ContentAddition.AddEntityState<ShieldChargeAntigravity>(out wasAdded);
             ContentAddition.AddEntityState<ShieldChargeHeavy>(out wasAdded);
             ContentAddition.AddEntityState<ShieldChargeLight>(out wasAdded);
             ContentAddition.AddEntityState<ChangeWeapons>(out wasAdded);
-            Debug.LogError("States have been initialised");
         }
         private static void InitSwordAttacks()
         {
@@ -2962,6 +2914,19 @@ namespace DemomanRor2
                 "Charge time: " + LangueagePrefix(grenadeLauncher.canBeCharged ? ((grenadeLauncher.chargeCap).ToString() + "s") : "Can't be charged", LanguagePrefixEnum.Damage) + "\n" +
                 explosionString);
         }
+        //public static void GenerateShieldDescriptionToken(string token, ShieldCharge shieldCharge, string before = "", string after = "")
+        //{
+        //    LanguageAPI.Add(token, $"" +
+        //        before +
+        //        "\n\n" +
+        //        "Base damage: " + LangueagePrefix((grenadeLauncher.damage * 100).ToString() + "%", LanguagePrefixEnum.Damage) + "\n" +
+        //        "Fire rate: " + LangueagePrefix((grenadeLauncher.fireRate).ToString() + "s", LanguagePrefixEnum.Damage) + "\n" +
+        //        "Base stocks: " + LangueagePrefix((skillDef.baseMaxStock).ToString(), LanguagePrefixEnum.Damage) + "\n" +
+        //        "Reload time: " + LangueagePrefix((skillDef.baseRechargeInterval).ToString(), LanguagePrefixEnum.Damage) + "\n" +
+        //        "Stocks to reload: " + LangueagePrefix((skillDef.rechargeStock).ToString(), LanguagePrefixEnum.Damage) + "\n" +
+        //        "Charge time: " + LangueagePrefix(grenadeLauncher.canBeCharged ? ((grenadeLauncher.chargeCap).ToString() + "s") : "Can't be charged", LanguagePrefixEnum.Damage) + "\n" +
+        //        explosionString);
+        //}
         private static void InitProjectiles()
         {
             StickyLauncherObject = new DemoStickyClass(StickyProjectile, 6f);
@@ -3011,15 +2976,25 @@ namespace DemomanRor2
             public bool isCrit;
             public GameObject swingEffect = SwingEffect;
             public BulletAttack bulletAttack;
+            public DemoSwordClass swordClass;
             public override void OnEnter()
             {
                 base.OnEnter();
-                bulletAttack = swordDictionary.ContainsKey(activatorSkillSlot.skillDef) ? ModifyAttack(swordDictionary[activatorSkillSlot.skillDef].bulletAttack) : ModifyAttack(DefaultSword.bulletAttack);
+                if (skillLocator)
+                {
+                    swordClass = swordDictionary.ContainsKey(skillLocator.primary.skillDef) ? swordDictionary[skillLocator.primary.skillDef] : DefaultSword;
+                    bulletAttack = ModifyAttack(swordClass.bulletAttack);
+                }
+                if (bulletAttack == null)
+                {
+                    bulletAttack = ModifyAttack(DefaultSword.bulletAttack);
+                }
                 if (stopwatch <= 0)
                 {
-                    PlayAnimation("Gesture, Override", "Swing", "Slash.playbackRate", 1f / base.attackSpeedStat);
+                    float animationTime = swordClass.swingUpTime + swordClass.swingDownTime;
+                    PlayAnimation("Gesture, Override", "Swing", "Slash.playbackRate", animationTime / base.attackSpeedStat);
                     base.StartAimMode();
-                    stopwatch = 0.5f / base.attackSpeedStat;
+                    stopwatch = swordClass.swingUpTime / base.attackSpeedStat;
                     fired = false;
                 }
 
@@ -3036,7 +3011,7 @@ namespace DemomanRor2
                     //BulletAttack bulletAttack = swordDictionary.ContainsKey(activatorSkillSlot.skillDef) ? ModifyAttack(swordDictionary[activatorSkillSlot.skillDef].bulletAttack) : DefaultSword.bulletAttack;
                     SwingSword(bulletAttack);
                     fired = true;
-                    stopwatch = 0.5f / base.attackSpeedStat;
+                    stopwatch = swordClass.swingDownTime / base.attackSpeedStat;
 
                 }
                 else if (isAuthority && stopwatch <= 0)
@@ -3477,7 +3452,7 @@ namespace DemomanRor2
                     {
                         chargeMeter.fillAmount = charge / chargeCap;
                     }
-                    if (!stopCharge && (!inputBank || !GetButton().down || charge >= chargeCap))
+                    if (isAuthority && !stopCharge && (!inputBank || !GetButton().down || charge >= chargeCap))
                     {
                         if (charge < chargeCap)
                         {
@@ -3752,6 +3727,20 @@ namespace DemomanRor2
             if (stickyCount > 0)
             {
                 Util.PlaySound(DemoStickyDetonationSound.playSoundString, gameObject);
+                Transform modelTransform = GetComponent<ModelLocator>()?.modelTransform;
+                ChildLocator childLocator = modelTransform?.GetComponent<ChildLocator>();
+                if (childLocator)
+                {
+                    Transform transform = childLocator.FindChild("Head");
+                    if (transform)
+                    {
+                        GameObject detonatingVFX = GameObject.Instantiate(ArmedEffect, transform);
+                        Transform transform1 = detonatingVFX.transform;
+                        transform1.localPosition = new Vector3(0.078f, 0.195f, 0.068f);
+                        transform1.localScale = new Vector3(0.1f, 0.1f, 0.1f);
+                        transform1.rotation = Quaternion.identity;
+                    }
+                }
             }
         }
         public override void FixedUpdate()
@@ -4045,7 +4034,7 @@ namespace DemomanRor2
             rotationVector = Quaternion.AngleAxis(1800 * Time.fixedDeltaTime * attackSpeedStat, Vector3.up) * rotationVector;
             characterDirection.forward = rotationVector;
             hitStopwatch += Time.fixedDeltaTime;
-            if (hitStopwatch >= hitTimer / 5 / attackSpeedStat)
+            if (hitStopwatch >= hitTimer / 4 / attackSpeedStat)
             {
                 specialSwordSpiner.charactersBlacklist.Clear();
                 hitStopwatch = 0f;
@@ -4169,6 +4158,8 @@ namespace DemomanRor2
             damage = demoSticky != null ? demoSticky.damage : 4;
             StickyComponent stickyComponent = demoSticky != null ? demoSticky.stickyObject.GetComponent<StickyComponent>() : null;
             fireTimes = stickyComponent != null ? stickyComponent.maxStickies : 8;
+
+
         }
         public override void OnExit()
         {
@@ -4285,9 +4276,11 @@ namespace DemomanRor2
         public override void OnEnter()
         {
             base.OnEnter();
+            if (NetworkServer.active)
+                characterBody.AddBuff(RoR2Content.Buffs.ArmorBoost);
             if (isAuthority)
             {
-                characterBody.AddBuff(RoR2Content.Buffs.ArmorBoost);
+                
                 FindTargets();
 
                 if (bodies.Count <= 0)
@@ -4362,7 +4355,6 @@ namespace DemomanRor2
         public void Update2()
         {
             stopwatch2 -= Time.fixedDeltaTime;
-            Chat.AddMessage(stopwatch2.ToString());
             if (stopwatch2 < 0)
             {
                 if (!returning)
@@ -4376,7 +4368,7 @@ namespace DemomanRor2
 
                     Calculate();
                 }
-                else if (overcharge && activatorSkillSlot.stock > 0)
+                else if (isAuthority && overcharge && activatorSkillSlot.stock > 0)
                 {
                     FindTargets();
                     if (bodies.Count <= 0)
@@ -4428,7 +4420,8 @@ namespace DemomanRor2
             {
                 if (characterMotor) characterMotor.useGravity = true;
             }
-            characterBody.RemoveBuff(RoR2Content.Buffs.ArmorBoost);
+            if (NetworkServer.active)
+                characterBody.RemoveBuff(RoR2Content.Buffs.ArmorBoost);
             if (previousStateMachine) previousStateMachine.SetNextStateToMain();
         }
         public override void Update()
@@ -4444,24 +4437,29 @@ namespace DemomanRor2
         {
             base.OnEnter();
             DemoComponent demoComponent = GetComponent<DemoComponent>();
-            if (demoComponent && demoComponent.isSwapped)
+            EntityStateMachine bodyStateMachine = GetComponent<EntityStateMachine>();
+            if (isAuthority)
             {
-                outer.SetNextState(new UltraInstinctSticky
+                if (demoComponent && demoComponent.isSwapped)
                 {
-                    activatorSkillSlot = activatorSkillSlot,
-                    previousStateMachine = activatorSkillSlot.stateMachine,
-                });
-            }
-            else
-            {
-                UltraInstinctSword ultraInstinctSword = new UltraInstinctSword();
-                ultraInstinctSword.activatorSkillSlot = activatorSkillSlot;
-                outer.SetNextState(new UltraInstinctSword
+                    bodyStateMachine.SetNextState(new UltraInstinctSticky
+                    {
+                        activatorSkillSlot = activatorSkillSlot,
+                        previousStateMachine = activatorSkillSlot.stateMachine,
+                    });
+                }
+                else
                 {
-                    activatorSkillSlot = activatorSkillSlot,
-                    previousStateMachine = activatorSkillSlot.stateMachine,
-                });
+                    UltraInstinctSword ultraInstinctSword = new UltraInstinctSword();
+                    ultraInstinctSword.activatorSkillSlot = activatorSkillSlot;
+                    bodyStateMachine.SetNextState(new UltraInstinctSword
+                    {
+                        activatorSkillSlot = activatorSkillSlot,
+                        previousStateMachine = activatorSkillSlot.stateMachine,
+                    });
+                }
             }
+            
         }
     }
     public class UltraInstinctSword : UltraInstinctState
@@ -4733,6 +4731,7 @@ namespace DemomanRor2
                 demoComponent.canUseUtility = false;
                 demoComponent.canUseSecondaryTimer = 0.1f;
                 demoComponent.UpdateHudObject();
+                
             }
             outer.SetNextStateToMain();
         }
@@ -4740,6 +4739,7 @@ namespace DemomanRor2
         {
             base.OnExit();
             characterBody.RecalculateStats();
+            characterBody.OnInventoryChanged();
         }
         public override InterruptPriority GetMinimumInterruptPriority()
         {
@@ -4747,4 +4747,58 @@ namespace DemomanRor2
         }
     }
 
+}
+
+public static class EmoteCompatAbility
+{
+    public const string customEmotesApiGUID = "com.weliveinasociety.CustomEmotesAPI";
+    public static void EmoteCompatability()
+    {
+        string path = "Assets/Demoman/DemoEmotes.prefab";
+        var skele = Main.ThunderkitAssets.LoadAsset<GameObject>(path);
+        EmotesAPI.CustomEmotesAPI.ImportArmature(DemoBody, skele);
+        skele.GetComponentInChildren<BoneMapper>().scale = 1f;
+        skele.transform.localPosition = new Vector3(0f, -0f, 0f);
+        skele.transform.localRotation = Quaternion.identity;
+        EmotesAPI.CustomEmotesAPI.animChanged += CustomEmotesAPI_animChanged;
+    }
+    private static void CustomEmotesAPI_animChanged(string newAnimation, BoneMapper mapper)
+    {
+        if (mapper.transform.name == "DemoEmotes")
+        {
+            ChildLocator childLocator = mapper.transform.parent.GetComponent<ChildLocator>();
+            ChildLocator childLocator2 = mapper.GetComponent<ChildLocator>();
+            Transform smokes = childLocator.FindChild("Smokes");
+            Transform smokes2 = childLocator2.FindChild("Smokes");
+            Transform weaponR = childLocator.FindChild("WeaponR");
+            Transform weaponL = childLocator.FindChild("WeaponL");
+            Transform shield = childLocator.FindChild("Shield");
+            if (newAnimation != "none")
+            {
+                smokes2.gameObject.SetActive(true);
+                smokes.gameObject.SetActive(false);
+                //smokes.SetParent(childLocator2.FindChild("Head"));
+                weaponR.gameObject.SetActive(false);
+                weaponL.gameObject.SetActive(false);
+                shield.gameObject.SetActive(false);
+                //smokes.localPosition = Vector3.zero;
+                //smokes.localRotation = Quaternion.identity;
+                //smokes.localScale = Vector3.one;
+
+            }
+            else
+            {
+                smokes2.gameObject.SetActive(false);
+                smokes.gameObject.SetActive(true);
+                //smokes.SetParent(childLocator.FindChild("Head"));
+                weaponR.gameObject.SetActive(true);
+                weaponL.gameObject.SetActive(true);
+                shield.gameObject.SetActive(true);
+                //smokes.localPosition = Vector3.zero;
+                //smokes.localRotation = Quaternion.identity;
+                //smokes.localScale = Vector3.one;
+
+            }
+        }
+    }
 }
