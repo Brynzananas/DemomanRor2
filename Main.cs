@@ -3335,7 +3335,7 @@ namespace DemomanRor2
             {
                 base.OnEnter();
                 demoComponent = gameObject.GetComponent<DemoComponent>();
-                if (canBeCharged) Util.PlaySound(DemoCannonChargeSound.playSoundString, gameObject);
+                if (canBeCharged && isAuthority) Util.PlaySound(DemoCannonChargeSound.playSoundString, gameObject);
                 if (base.isAuthority)
                 {
                     
@@ -3379,13 +3379,14 @@ namespace DemomanRor2
                 if (isAuthority)
                 {
                     ProjectileManager.instance.FireProjectile(fireProjectileInfo);
+                    Util.PlaySound(fireProjectileInfo.crit ? DemoGrenadeShootCritSound.playSoundString : DemoGrenadeShootSound.playSoundString, gameObject);
                 }
                 if (chargeMeter)
                 {
                     chargeMeter.fillAmount = 0f;
                 }
                 
-                Util.PlaySound(fireProjectileInfo.crit ? DemoGrenadeShootCritSound.playSoundString : DemoGrenadeShootSound.playSoundString, gameObject);
+                
                 
                 OnProjectileFired();
             }
