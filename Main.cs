@@ -25,6 +25,8 @@ using KinematicCharacterController;
 using System.Security;
 using MonoMod.Cil;
 using Mono.Cecil.Cil;
+using HarmonyLib;
+using System.Text;
 [assembly: SecurityPermission(SecurityAction.RequestMinimum, SkipVerification = true)]
 [assembly: HG.Reflection.SearchableAttribute.OptIn]
 [assembly: HG.Reflection.SearchableAttribute.OptInAttribute]
@@ -106,6 +108,161 @@ namespace DemomanRor2
             //IL.RoR2.CharacterBody.RecalculateStats += CharacterBody_RecalculateStats;
             //On.RoR2.CharacterModel.UpdateMaterials += CharacterModel_UpdateMaterials;
             On.RoR2.GlobalEventManager.IsImmuneToFallDamage += GlobalEventManager_IsImmuneToFallDamage;
+            //On.RoR2.UI.CharacterSelectController.RebuildStrip += CharacterSelectController_RebuildStrip;
+            //On.RoR2.UI.CharacterSelectController.BuildSkillStripDisplayData += CharacterSelectController_BuildSkillStripDisplayData;
+            
+        }
+        public class ThisIsBad : MonoBehaviour
+        {
+            public void Start()
+            {
+                CharacterSelectController characterSelectController = FindObjectOfType<CharacterSelectController>();
+                if (characterSelectController)
+                {
+                    Transform skillsPanel = characterSelectController.transform.Find("SafeArea/LeftHandPanel (Layer: Main)/SurvivorInfoPanel, Active (Layer: Secondary)/ContentPanel (Overview, Skills, Loadout)/SkillScrollContainer/SkillsScrollPanel");
+                    if (skillsPanel)
+                    {
+                        int i = 0;
+                        foreach (Transform child in skillsPanel)
+                        {
+                            if (child.name == "SkillStripPrefab(Clone)")
+                            {
+                                Transform skillDescriptionText = child.Find("Inner/SkillDescriptionPanel/SkillDescription")?.GetChild(0);
+                                if (skillDescriptionText)
+                                {
+                                    TMP_SubMeshUI tMP_SubMeshUI = skillDescriptionText.GetComponent<TMP_SubMeshUI>();
+                                    if (tMP_SubMeshUI.textComponent)
+                                    {
+                                        tMP_SubMeshUI.textComponent.text = i.ToString();
+                                    }
+                                }
+                                i++;
+                            }
+                        }
+                    }
+                }
+            }
+
+        }
+        private void CharacterSelectController_BuildSkillStripDisplayData(On.RoR2.UI.CharacterSelectController.orig_BuildSkillStripDisplayData orig, CharacterSelectController self, Loadout loadout, ValueType bodyInfo, object dest)
+        {
+            CharacterSelectController.BodyInfo bodyInfo2 = (CharacterSelectController.BodyInfo)bodyInfo;
+            Debug.Log("ItWorks");
+            if (bodyInfo2.bodyPrefab == DemoBody)
+            {
+                List<CharacterSelectController.StripDisplayData> stripDisplayDatas = dest as List<CharacterSelectController.StripDisplayData>;
+                Debug.Log("It's Demo");
+                if (!bodyInfo2.bodyPrefab || !bodyInfo2.bodyPrefabBodyComponent || !bodyInfo2.skillLocator)
+                {
+                    return;
+                }
+                BodyIndex bodyIndex = bodyInfo2.bodyIndex;
+                SkillLocator skillLocator = bodyInfo2.skillLocator;
+                GenericSkill[] skillSlots = bodyInfo2.skillSlots;
+                Color bodyColor = bodyInfo2.bodyColor;
+                if (skillLocator.passiveSkill.enabled)
+                {
+                    CharacterSelectController.StripDisplayData item = new CharacterSelectController.StripDisplayData
+                    {
+                        enabled = true,
+                        primaryColor = bodyColor,
+                        icon = skillLocator.passiveSkill.icon,
+                        titleString = Language.GetString(skillLocator.passiveSkill.skillNameToken),
+                        descriptionString = Language.GetString(skillLocator.passiveSkill.skillDescriptionToken),
+                        keywordString = (string.IsNullOrEmpty(skillLocator.passiveSkill.keywordToken) ? "" : Language.GetString(skillLocator.passiveSkill.keywordToken)),
+                        actionName = ""
+                    };
+                    stripDisplayDatas.Add(item);
+                }
+                for (int i = 0; i < skillSlots.Length; i++)
+                {
+                    GenericSkill genericSkill = skillSlots[i];
+                    if (!genericSkill.hideInCharacterSelect)
+                    {
+                        uint skillVariant = loadout.bodyLoadoutManager.GetSkillVariant(bodyIndex, i);
+                        SkillDef skillDef = genericSkill.skillFamily.variants[(int)skillVariant].skillDef;
+                        string actionName = "";
+                        switch (skillLocator.FindSkillSlot(genericSkill))
+                        {
+                            case SkillSlot.Primary:
+                                actionName = "PrimarySkill";
+                                break;
+                            case SkillSlot.Secondary:
+                                actionName = "SecondarySkill";
+                                break;
+                            case SkillSlot.Utility:
+                                actionName = "UtilitySkill";
+                                break;
+                            case SkillSlot.Special:
+                                actionName = "SpecialSkill";
+                                break;
+                        }
+                        string keywordString = string.Empty;
+                        if (skillDef.keywordTokens != null)
+                        {
+                            StringBuilder stringBuilder = HG.StringBuilderPool.RentStringBuilder();
+                            for (int j = 0; j < skillDef.keywordTokens.Length; j++)
+                            {
+                                string @string = Language.GetString(skillDef.keywordTokens[j]);
+                                stringBuilder.Append(@string).Append("\n\n");
+                            }
+                            keywordString = stringBuilder.ToString();
+                            stringBuilder = HG.StringBuilderPool.ReturnStringBuilder(stringBuilder);
+                        }
+                        CharacterSelectController.StripDisplayData item = new CharacterSelectController.StripDisplayData
+                        {
+                            enabled = true,
+                            primaryColor = bodyColor,
+                            icon = skillDef.icon,
+                            titleString = Language.GetString(skillDef.skillNameToken),
+                            descriptionString = "balls",//Language.GetString(skillDef.skillDescriptionToken),
+                            keywordString = keywordString,
+                            actionName = actionName
+                        };
+                        stripDisplayDatas.Add(item);
+                    }
+                }
+
+            }
+            else
+            {
+                orig(self, loadout, bodyInfo, dest);
+            }
+            
+        }
+
+        private void CharacterSelectController_RebuildStrip(On.RoR2.UI.CharacterSelectController.orig_RebuildStrip orig, CharacterSelectController self, RectTransform skillStrip, ValueType stripDisplayData)
+        {
+            Debug.LogError("Does ti even work?");
+            LocalUser localUser = self.localUser;
+            NetworkUser networkUser = (localUser != null) ? localUser.currentNetworkUser : null;
+            SurvivorDef survivorDef = networkUser ? networkUser.GetSurvivorPreference() : null;
+            CharacterSelectController.BodyInfo bodyInfo = new CharacterSelectController.BodyInfo(SurvivorCatalog.GetBodyIndexFromSurvivorIndex(survivorDef ? survivorDef.survivorIndex : SurvivorIndex.None));
+            if (bodyInfo.bodyIndex == BodyCatalog.FindBodyIndex("DemolisherBody"))
+            {
+                CharacterSelectController.StripDisplayData stripDisplay = (CharacterSelectController.StripDisplayData)stripDisplayData;
+                Debug.Log("It's Demoman");
+                GameObject gameObject = skillStrip.gameObject;
+                Image component = skillStrip.Find("Inner/Icon").GetComponent<Image>();
+                HGTextMeshProUGUI component2 = skillStrip.Find("Inner/SkillDescriptionPanel/SkillName").GetComponent<HGTextMeshProUGUI>();
+                HGTextMeshProUGUI component3 = skillStrip.Find("Inner/SkillDescriptionPanel/SkillDescription").GetComponent<HGTextMeshProUGUI>();
+                HGButton component4 = skillStrip.gameObject.GetComponent<HGButton>();
+                if (stripDisplay.enabled)
+                {
+                    gameObject.SetActive(true);
+                    component.sprite = stripDisplay.icon;
+                    component2.SetText(stripDisplay.titleString, true);
+                    component2.color = stripDisplay.primaryColor;
+                    component3.SetText("balls", true);
+                    component4.hoverToken = stripDisplay.keywordString;
+                    return;
+                }
+                gameObject.SetActive(false);
+            }
+            else
+            {
+                orig(self, skillStrip, stripDisplayData);
+            }
             
         }
 
@@ -572,6 +729,8 @@ namespace DemomanRor2
         public static GameObject SwingEffect;
         public static GameObject SpinEffect;
         public static GameObject ArmedEffect;
+        public static GameObject FullyArmedEffect;
+        public static GameObject SwordTrail;
         public static Sprite StickyIndicator;
         public static Sprite SwordIndicator;
         public static Sprite ShieldIndicator;
@@ -627,6 +786,8 @@ namespace DemomanRor2
             SpinEffect = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/SpecialSwing.prefab");
             SpinEffect.AddComponent<SpecialSwordSpiner>();
             ArmedEffect = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/StickyArmedVFX.prefab");
+            FullyArmedEffect = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/StickyFullyArmedVFX.prefab");
+            SwordTrail = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/SwordTrail.prefab");
             //UpgradeItem = AddItem("DemoStompItem", ItemTier.NoTier, null, null, false, true, new ItemTag[] {ItemTag.WorldUnique}, null);
             List<GameObject> projectiles = new List<GameObject>();
             Main.PillProjectile = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/Projectiles/Pill/PillProjectile.prefab");
@@ -652,8 +813,8 @@ namespace DemomanRor2
             Main.JumperProjectile = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/Projectiles/JumperStickybomb 1/JumperStickybombProjectile.prefab");
             JumperProjectile.AddComponent<DefaultSticky>();
             var jumperComponent = JumperProjectile.AddComponent<DemoExplosionComponent>();
-            jumperComponent.enemyPower = 12f;
-            jumperComponent.selfPower = 15f;
+            jumperComponent.enemyPower = 7f;
+            jumperComponent.selfPower = 10f;
             projectiles.Add(Main.JumperProjectile);
             Main.AntigravProjectile = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/Projectiles/AntigravityStickyBomb/AntigravityStickyBombProjectile.prefab");
             projectiles.Add(Main.AntigravProjectile);
@@ -693,18 +854,19 @@ namespace DemomanRor2
         {
             DemoBody = Main.ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/DemolisherBody.prefab");
             LanguageAPI.Add("DEMOLISHER_BODY_NAME", "Demolisher");
+            LanguageAPI.Add("DEMO_SKIN_DEFAULT", "Default");
             LanguageAPI.Add("DEMOLISHER_BODY_SUBTITLE", "Reborn Demon");
             LanguageAPI.Add("DEMOLISHER_NAME", "Demolisher");
-            LanguageAPI.Add("DEMOLISHER_DESC", "Demolisher is a powerfull character that can switch between melee and ranged styleы at any moment. To switch styles, hold Utility button and click Secondary button.\n" +
+            LanguageAPI.Add("DEMOLISHER_DESC", "Demolisher is a powerfull character that can switch between melee and ranged styles at any moment. To switch styles, hold Utility button and click Secondary button.\n" +
                 "\n" +
-                "<style=cSub>\r\n\r\n< ! > Passive allows Demolisher for harmless landing. His explosives have knockback that can be used as a quick position relocation." +
-                "\r\n\r\n< ! > Swords have small radius of attack, so you mast aim at the target you want to hit. They compensate it with their high burst damage and strong effects." +
-                "\r\n\r\n< ! > In ranged style swords are replaced with trap bomb launchers. On impact they stick to the surface and wait for user input for detonation signal." +
+                "<style=cSub>\r\n\r\n< ! > Passive allows Demolisher for harmless landing. His explosives have knockback that can be used as a quick position relocation. Holding jump button will redirect knockback force to face your aim direction." +
+                "\r\n\r\n< ! > Swords have a small radius of attack, so you mast aim at the target you want to hit. They compensate it with their high burst damage and strong effects. Swords recharge 25% of Utility charge on hit." +
+                "\r\n\r\n< ! > In ranged style swords are replaced with trap bomb launchers. On impact they stick to the surface and wait for user input for detonation signal. After a while they fully arm, gaining additional damage and blast radius." +
                 "\r\n\r\n< ! > Grenades are awailable for both styles and are a quick way of dealing with targets on distance." +
                 "\r\n\r\n< ! > Shield charge is a great movement skill while also having attack capabilities of increasing sword damage. Shield charge is cancelled upon sword attack, but retains damage increase for a short time." +
                 "\r\n\r\n< ! > In ranged style shield charge is replaced with traps detonation. Traps require time to be armed for detonation and have time before explosion after detonation request." +
                 "\r\n\r\n< ! > Specials can utilise primary selection and base their effects from them.");
-            LanguageAPI.Add("DEMOLISHER_OUTRO_FLAVOR", "And so he left... remembering who he was...");
+            LanguageAPI.Add("DEMOLISHER_OUTRO_FLAVOR", "And so he left... enjoying every moment of it...");
             LanguageAPI.Add("DEMOLISHER_OUTRO_FAILURE", "If he was a good Demolisher... maybe he could escape...");
             CharacterBody demoCharacterBody = DemoBody.GetComponent<CharacterBody>();
             demoCharacterBody.preferredPodPrefab = Addressables.LoadAssetAsync<GameObject>("RoR2/Base/SurvivorPod/SurvivorPod.prefab").WaitForCompletion();
@@ -787,7 +949,9 @@ namespace DemomanRor2
 
         private static void SurvivorCatalog_getAdditionalSurvivorDefs(List<SurvivorDef> obj)
         {
-            obj.Add(Main.ThunderkitAssets.LoadAsset<SurvivorDef>("Assets/Demoman/DemoSurvivor.asset"));
+            SurvivorDef survivorDef = Main.ThunderkitAssets.LoadAsset<SurvivorDef>("Assets/Demoman/DemoSurvivor.asset");
+            //survivorDef.displayPrefab.AddComponent<ThisIsBad>();
+            obj.Add(survivorDef);
         }
 
         public static void Overheal(HealthComponent toHeal, float healFraction)
@@ -945,8 +1109,8 @@ namespace DemomanRor2
             private ProjectileExplosion explosion;
             private float radius;
             private Vector3 explosionPosition;
-            public float selfPower = 10f;
-            public float enemyPower = 2f;
+            public float selfPower = 4f;
+            public float enemyPower = 1f;
             private List<CharacterBody> bodyList = new List<CharacterBody>();
             private List<GameObject> nearbyExplosions = new List<GameObject>();
             private TeamFilter teamFilter;
@@ -981,7 +1145,7 @@ namespace DemomanRor2
             public void OnDisable()
             {
                 explosionPosition = transform.position;
-                radius = explosion.blastRadius;
+                radius = explosion.blastRadius * 1.35f;
                 teamIndex = teamFilter ? teamFilter.teamIndex : TeamIndex.None;
                 ProjectileController projectileController = GetComponent<ProjectileController>();
                 owner = projectileController ? projectileController.owner : null;
@@ -1006,9 +1170,9 @@ namespace DemomanRor2
                     {
                         if (body.characterMotor.velocity.y < 0) body.characterMotor.velocity.y = 0;
                         Vector3 characterPosition = body.hurtBoxGroup && body.hurtBoxGroup.mainHurtBox ? body.hurtBoxGroup.mainHurtBox.transform.position : body.corePosition;
-                        Vector3 pushVector = (characterPosition - explosionPosition).normalized * radius;
+                        Vector3 pushVector = (characterPosition - explosionPosition).normalized * radius * 1.35f;
                         pushVector.y = pushVector.y / 2f;
-                        if (body.inputBank && body.inputBank.jump.down)
+                        if (body.teamComponent.teamIndex == teamIndex && body.inputBank && body.inputBank.jump.down)
                         {
                             pushVector = Vector3.RotateTowards(pushVector, body.inputBank.aimDirection, 360f, 0f);
                         }
@@ -1190,7 +1354,6 @@ namespace DemomanRor2
                     }
                     else
                     {
-                        Debug.Log("Not Found");
                         Destroy(this);
                         return;
                     }
@@ -1251,7 +1414,6 @@ namespace DemomanRor2
                 }
                 else
                 {
-                    Debug.Log("Released");
                     Destroy(this);
                 }
             }
@@ -1365,8 +1527,12 @@ namespace DemomanRor2
             public float additionalArmTime = 0f;
             private InputBankTest inputBank;
             private SkillLocator skillLocator;
-            public int stock = 0;
-            public float cooldown = 0f;
+            public int secondaryStocks = 0;
+            public float secondaryCooldown = 0f;
+            public int primaryStocks = 0;
+            public float primaryCooldown = 0f;
+            public int primaryReplaceStocks = 0;
+            public float primaryReplaceCooldown = 0f;
             public GenericSkill primaryReplace;
             public GenericSkill utilityReplace;
             public GenericSkill secondaryReplace;
@@ -1505,19 +1671,6 @@ namespace DemomanRor2
                                 GameObject swordNewModel = Instantiate(swordModel, weaponTransform);
                                 swordNewModel.transform.localEulerAngles = new Vector3(0f, 180f, 0f);
                                 list.Add(swordNewModel);
-                                /*if (characterModel)
-                                {
-
-                                    ItemDisplay itemDisplay = swordNewModel.AddComponent<ItemDisplay>();
-                                    CharacterModel.ParentedPrefabDisplay parentedPrefabDisplay = new CharacterModel.ParentedPrefabDisplay
-                                    {
-                                        instance = swordNewModel,
-                                        itemDisplay = itemDisplay,
-                                        equipmentIndex = 0,
-                                        itemIndex = 0
-                                    };
-                                    characterModel.parentedPrefabDisplays.Add(parentedPrefabDisplay);
-                                }*/
 
                             }
                         }
@@ -1583,7 +1736,6 @@ namespace DemomanRor2
             }
             public void FixedUpdate()
             {
-                //if (isSwapped) return;
                 if (canUseUtility && canUseUtilityTimer > 0f) canUseUtilityTimer -= Time.fixedDeltaTime;
                 if (canUseSecondary && canUseSecondaryTimer > 0f) canUseSecondaryTimer -= Time.fixedDeltaTime;
                 if (!hudObject && overlayController != null && overlayController.instancesList.Count > 0)
@@ -1678,11 +1830,27 @@ namespace DemomanRor2
                     }
                     if (primaryStopwatch && trackPrimary)
                     {
-                        primaryStopwatch.fillAmount = 1 - ((trackPrimary.finalRechargeInterval - trackPrimary.rechargeStopwatch) / trackPrimary.finalRechargeInterval);
+                        if (trackPrimary.stock >= trackPrimary.maxStock)
+                        {
+                            primaryStopwatch.fillAmount = 1;
+                        }
+                        else
+                        {
+                            primaryStopwatch.fillAmount = 1 - ((trackPrimary.finalRechargeInterval - trackPrimary.rechargeStopwatch) / trackPrimary.finalRechargeInterval);
+                        }
+                        
                     }
                     if (secondaryStopwatch)
                     {
-                        secondaryStopwatch.fillAmount = 1 - ((skillLocator.secondary.finalRechargeInterval - skillLocator.secondary.rechargeStopwatch) / skillLocator.secondary.finalRechargeInterval);
+                        if (skillLocator.secondary.stock >= skillLocator.secondary.maxStock)
+                        {
+                            secondaryStopwatch.fillAmount = 1;
+                        }
+                        else
+                        {
+                            secondaryStopwatch.fillAmount = 1 - ((skillLocator.secondary.finalRechargeInterval - skillLocator.secondary.rechargeStopwatch) / skillLocator.secondary.finalRechargeInterval);
+                        }
+                        
                     }
                 }
                 
@@ -1693,13 +1861,21 @@ namespace DemomanRor2
                 }
                 if (meterImage && trackUtility && updateMeter)
                 {
-                    meterImage.fillAmount = 1 - ((trackUtility.finalRechargeInterval - trackUtility.rechargeStopwatch) / trackUtility.finalRechargeInterval);
+                    if (trackUtility.stock >= trackUtility.maxStock)
+                    {
+                        meterImage.fillAmount = 1;
+                    }
+                    else
+                    {
+                        meterImage.fillAmount = 1 - ((trackUtility.finalRechargeInterval - trackUtility.rechargeStopwatch) / trackUtility.finalRechargeInterval);
+                    }
+                    
                 }
 
             }
             public void Update()
             {
-                if (inputBank)
+                if (inputBank && skillLocator)
                 {
                     if (inputBank.skill3.justPressed)
                     {
@@ -1716,9 +1892,12 @@ namespace DemomanRor2
                             }
                         if (!switchOff)
                         {
-                            cooldown = skillLocator.secondary.rechargeStopwatch;
-                            stock = skillLocator.secondary.stock;
+                            secondaryCooldown = skillLocator.secondary.rechargeStopwatch;
+                            secondaryStocks = skillLocator.secondary.stock;
                             skillLocator.secondary.SetSkillOverride(this, SwapSkillDef, GenericSkill.SkillOverridePriority.Contextual);
+                            primaryReplaceCooldown = skillLocator.special.rechargeStopwatch;
+                            primaryReplaceStocks = skillLocator.special.stock;
+                            skillLocator.special.SetSkillOverride(this, SwapSkillDef, GenericSkill.SkillOverridePriority.Contextual);
                         }
 
                     }
@@ -1738,8 +1917,11 @@ namespace DemomanRor2
                         if (switchOff)
                         {
                             skillLocator.secondary.UnsetSkillOverride(this, SwapSkillDef, GenericSkill.SkillOverridePriority.Contextual);
-                            skillLocator.secondary.stock = stock;
-                            skillLocator.secondary.rechargeStopwatch = cooldown;
+                            skillLocator.secondary.stock = secondaryStocks;
+                            skillLocator.secondary.rechargeStopwatch = secondaryCooldown;
+                            skillLocator.special.UnsetSkillOverride(this, SwapSkillDef, GenericSkill.SkillOverridePriority.Contextual);
+                            skillLocator.special.stock = primaryReplaceStocks;
+                            skillLocator.special.rechargeStopwatch = primaryReplaceCooldown;
                         }
                         if (canUseUtilityTimer <= 0)
                         {
@@ -1845,19 +2027,27 @@ namespace DemomanRor2
         {
             private float stopwatch = 0f;
             public abstract float armTime { get; }
+            public abstract float fullArmTime { get; }
+            public abstract float damageIncrease { get; }
+            public abstract float radiusIncrease { get; }
             public abstract string stickyName { get; }
             public abstract float detonationTime { get; }
             public abstract int maxStickies { get; }
-            private bool armed = true;
+            private bool armed = false;
+            private bool fullyArmed = false;
             //public bool isArmed = false;
             private DemoComponent demoComponent;
-            public GameObject armedVFX = ArmedEffect;// Addressables.LoadAssetAsync<GameObject>("RoR2/DLC2/Items/IncreaseDamageOnMultiKill/IncreaseDamageOnMultiKillVFX.prefab").WaitForCompletion();
+            public GameObject armedVFX = ArmedEffect;
+            public GameObject fullyArmedVFX = FullyArmedEffect;
             public bool sticked = false;
             public abstract bool isStickable { get; }
             private Rigidbody rigidbody;
             private ProjectileImpactExplosion projectileImpactExplosion;
             private string currentName;
             public DemoSoundClass demoSound = DemoStickyDetonationSound;
+            private ProjectileDamage projectileDamage;
+            private DemoExplosionComponent explosionComponent;
+            private ProjectileController projectileController;
             //public void OnEnable()
             //{
 
@@ -1876,8 +2066,23 @@ namespace DemomanRor2
                     }
                 }
             }
+            public bool isFullyArmed
+            {
+                get
+                {
+                    if (stopwatch > fullArmTime)
+                    {
+                        return true;
+                    }
+                    else
+                    {
+                        return false;
+                    }
+                }
+            }
             public virtual void Start()
             {
+                projectileController = GetComponent<ProjectileController>();
                 rigidbody = GetComponent<Rigidbody>();
                 demoComponent = GetComponent<ProjectileController>().owner.GetComponent<DemoComponent>();
                 projectileImpactExplosion = GetComponent<ProjectileImpactExplosion>();
@@ -1899,18 +2104,27 @@ namespace DemomanRor2
                     }
 
                 }
+                projectileDamage = GetComponent<ProjectileDamage>();
+                explosionComponent = GetComponent<DemoExplosionComponent>();
                 
             }
             public virtual void OnStickyArmed()
             {
-                //EffectData effectData = new EffectData
-                //{
-                //    scale = 1f,
-                //    rotation = Quaternion.identity,
-                //    origin = transform.position,
-
-                //};
-                //EffectManager.SpawnEffect(armedVFX, effectData, true);
+                GameObject.Instantiate(armedVFX, transform);
+            }
+            public virtual void OnStickyFullyArmed()
+            {
+                if (projectileImpactExplosion)
+                {
+                    projectileImpactExplosion.blastRadius *= radiusIncrease;
+                    if (explosionComponent)
+                    {
+                        explosionComponent.selfPower /= radiusIncrease;
+                        explosionComponent.enemyPower /= radiusIncrease;
+                    }
+                }
+                if (projectileDamage)
+                    projectileDamage.damage *= damageIncrease;
                 GameObject.Instantiate(armedVFX, transform);
             }
             public List<StickyComponent> GetOrCreateListOfStickies(string listName)
@@ -1940,12 +2154,17 @@ namespace DemomanRor2
             }
             public virtual void FixedUpdate()
             {
-                if (!isArmed)
-                    stopwatch += Time.fixedDeltaTime;
-                if (isArmed && armed)
+                stopwatch += Time.fixedDeltaTime;
+                
+                if (!armed && isArmed)
                 {
                     OnStickyArmed();
-                    armed = false;
+                    armed = true;
+                }
+                if (!fullyArmed && isFullyArmed)
+                {
+                    OnStickyFullyArmed();
+                    fullyArmed = true;
                 }
 
             }
@@ -1977,6 +2196,12 @@ namespace DemomanRor2
             public override float detonationTime => 0.4f;
 
             public override int maxStickies => 8;
+
+            public override float fullArmTime => 2f;
+
+            public override float damageIncrease => 1.5f;
+
+            public override float radiusIncrease => 2f;
         }
         public class AntigravSticky : StickyComponent
         {
@@ -1989,6 +2214,12 @@ namespace DemomanRor2
             public override float detonationTime => 0.2f;
 
             public override int maxStickies => 4;
+
+            public override float fullArmTime => 2f;
+
+            public override float damageIncrease => 1.5f;
+
+            public override float radiusIncrease => 2f;
         }
         public class Mine : StickyComponent
         {
@@ -2001,6 +2232,11 @@ namespace DemomanRor2
             public override float detonationTime => 0.4f;
 
             public override int maxStickies => 16;
+            public override float fullArmTime => 6f;
+
+            public override float damageIncrease => 3f;
+
+            public override float radiusIncrease => 2f;
 
             public override void Start()
             {
@@ -2210,10 +2446,10 @@ namespace DemomanRor2
             demoPassiveFamily = Main.ThunderkitAssets.LoadAsset<SkillFamily>("Assets/Demoman/DemoPassive.asset");
             BulletAttack DefaultBulletAttack = new BulletAttack()
             {
-                radius = 1f,
+                radius = 1.5f,
                 damage = 5,
                 bulletCount = 1,
-                maxDistance = 6,
+                maxDistance = 8,
                 allowTrajectoryAimAssist = true,
                 hitMask = LayerIndex.entityPrecise.mask,
                 procCoefficient = 1f,
@@ -2225,10 +2461,10 @@ namespace DemomanRor2
             DefaultSword = new DemoSwordClass(DefaultBulletAttack);
             BulletAttack SkullcutterBulletAttack = new BulletAttack()
             {
-                radius = 1f,
+                radius = 1.5f,
                 damage = 5,
                 bulletCount = 1,
-                maxDistance = 7,
+                maxDistance = 10,
                 allowTrajectoryAimAssist = true,
                 hitMask = LayerIndex.entityPrecise.mask,
                 procCoefficient = 1f,
@@ -2264,18 +2500,19 @@ namespace DemomanRor2
                 }
                 return BulletAttack.DefaultHitCallbackImplementation(bulletAttack, ref hitInfo);
             }
-            SkullcutterSkillDef = SwordInit(Skullcutter, typeof(DemoSword), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoSkullcutterSkillIcon.png"), "DemoSkullcutter", "DEMOMAN_SKULLCUTTER_NAME", "DEMOMAN_SKULLCUTTER_DESC");
+            SkullcutterSkillDef = SwordInit(Skullcutter, typeof(DemoSword), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoSkullcutterSkillIcon.png"), "DemoSkullcutter", "DEMOMAN_SKULLCUTTER_NAME", "DEMOMAN_SKULLCUTTER_DESC", new string[] { "DEMOMAN_SKULLCUTTER_KEY" });
             LanguageAPI.Add("DEMOMAN_SKULLCUTTER_NAME", "Skullcutter");
-            GenerateSwordDescriptionToken("DEMOMAN_SKULLCUTTER_DESC", Skullcutter, "Skullcutter is a relieble weapon for killing weak targets and consistently damaging stronger targets",
+            LanguageAPI.Add("DEMOMAN_SKULLCUTTER_DESC", "Skullcutter is a relieble weapon for killing weak targets and consistently damaging stronger targets.");
+            GenerateSwordKeywordToken("DEMOMAN_SKULLCUTTER_KEY", Skullcutter, "Skullcutter.",
                 "On hit: Increase next melee attack crit chance by 10%. Resets on crit success\n" +
                 "Special: Deals 3x more damage to the targets you hit for the first time\n" +
                 "Passive: Reduces base movement speed by 2m/s when held");
             BulletAttack ZatoichiBulletAttack = new BulletAttack()
             {
-                radius = 1f,
+                radius = 1.5f,
                 damage = 5,
                 bulletCount = 1,
-                maxDistance = 6,
+                maxDistance = 8,
                 allowTrajectoryAimAssist = true,
                 hitMask = LayerIndex.entityPrecise.mask,
                 procCoefficient = 1f,
@@ -2300,17 +2537,18 @@ namespace DemomanRor2
                 }
                 return BulletAttack.DefaultHitCallbackImplementation(bulletAttack, ref hitInfo);
             }
-            ZatoichiSkillDef = SwordInit(Zatoichi, typeof(DemoSword), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoZatoichiSkillIcon.png"), "DemoZatoichi", "DEMOMAN_ZATOICHI_NAME", "DEMOMAN_ZATOICHI_DESC");
+            ZatoichiSkillDef = SwordInit(Zatoichi, typeof(DemoSword), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoZatoichiSkillIcon.png"), "DemoZatoichi", "DEMOMAN_ZATOICHI_NAME", "DEMOMAN_ZATOICHI_DESC", new string[] { "DEMOMAN_ZATOICHI_KEY" });
             LanguageAPI.Add("DEMOMAN_ZATOICHI_NAME", "Zatoichi");
-            GenerateSwordDescriptionToken("DEMOMAN_ZATOICHI_DESC", Zatoichi, "Zatoichi is a great weapon for mainatining your health in a heat of battle. Heals from this weapon will give barrier when on full health",
+            LanguageAPI.Add("DEMOMAN_ZATOICHI_DESC", "Zatoichi is a great weapon for mainatining your health in a heat of battle. Heals from this weapon will give barrier when on full health.");
+            GenerateSwordKeywordToken("DEMOMAN_ZATOICHI_DESC", Zatoichi, "Zatoichi.",
                 "On hit: Heal for 4% of the maximum health\n" +
                 "On kill: Heal for 15% of the maximum health");
             BulletAttack CaberBulletAttack = new BulletAttack()
             {
-                radius = 1f,
+                radius = 1.2f,
                 damage = 3,
                 bulletCount = 1,
-                maxDistance = 4,
+                maxDistance = 6,
                 allowTrajectoryAimAssist = true,
                 hitMask = LayerIndex.entityPrecise.mask + LayerIndex.world.mask,
                 procCoefficient = 1f,
@@ -2319,7 +2557,7 @@ namespace DemomanRor2
                 hitCallback = CaberOnHit
 
             };
-            Caber = new DemoSwordClass(CaberBulletAttack, 0.2f, 0.4f, swordObject: ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/Weapons/Swords/caber.prefab"));
+            Caber = new DemoSwordClass(CaberBulletAttack, 0.1f, 0.2f, swordObject: ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/Weapons/Swords/caber.prefab"));
             bool CaberOnHit(BulletAttack bulletAttack, ref BulletAttack.BulletHit hitInfo)
             {
                 CharacterBody ownerBody = bulletAttack.owner.GetComponent<CharacterBody>();
@@ -2333,7 +2571,7 @@ namespace DemomanRor2
                     {
                         attacker = bulletAttack.owner,
                         attackerFiltering = AttackerFiltering.Default,
-                        baseDamage = ownerBody.damage * (ownerBody.characterMotor ? ownerBody.characterMotor.velocity.magnitude : ownerBody.rigidbody.velocity.magnitude) * 2,
+                        baseDamage = ownerBody.damage * 3f * (ownerBody.characterMotor ? ownerBody.characterMotor.velocity.magnitude : ownerBody.rigidbody.velocity.magnitude) * (ownerBody.characterMotor && !ownerBody.characterMotor.isGrounded ? 0.7f : 0.5f),
                         baseForce = 3f,
                         bonusForce = Vector3.up,
                         canRejectForce = true,
@@ -2370,7 +2608,7 @@ namespace DemomanRor2
                     {
                         if (skill.stateMachine && skill.stateMachine.state is DemoSword)
                         {
-                            if (skill.stock > 1)
+                            if (skill.stock > 0)
                             {
                                 check = true;
                             }
@@ -2381,15 +2619,16 @@ namespace DemomanRor2
                     return check;
                 }
             }
-            CaberSkillDef = SwordInit(Caber, typeof(DemoSword), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoCaberSkillIcon.png"), "DemoCaber", "DEMOMAN_CABER_NAME", "DEMOMAN_CABER_DESC", requiredStock: 0, rechargeInterval: 8f, stockToConsume: 0, baseStock: 2); ;
+            CaberSkillDef = SwordInit(Caber, typeof(DemoSword), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoCaberSkillIcon.png"), "DemoCaber", "DEMOMAN_CABER_NAME", "DEMOMAN_CABER_DESC", new string[] { "DEMOMAN_CABER_KEY" }, requiredStock: 0, rechargeInterval: 8f, stockToConsume: 0, baseStock: 1); ;
             LanguageAPI.Add("DEMOMAN_CABER_NAME", "Caber");
-            GenerateSwordDescriptionToken("DEMOMAN_CABER_DESC", Caber, "Caber is a weak, but fast handheld grenade that explodes on enemy or terrain hit, dealing massive damage based on current velocity. Explosion reloads 8 seconds");
+            LanguageAPI.Add("DEMOMAN_CABER_DESC", "Caber is a weak, but fast handheld grenade that explodes on enemy or terrain hit, dealing massive damage based on current velocity. Explosion reloads 8 seconds.");
+            GenerateSwordKeywordToken("DEMOMAN_CABER_DESC", Caber, "Caver.");
             BulletAttack EyelanderBulletAttack = new BulletAttack()
             {
-                radius = 1f,
+                radius = 1.5f,
                 damage = 5,
                 bulletCount = 1,
-                maxDistance = 6,
+                maxDistance = 8,
                 allowTrajectoryAimAssist = true,
                 hitMask = LayerIndex.entityPrecise.mask,
                 procCoefficient = 1f,
@@ -2414,52 +2653,69 @@ namespace DemomanRor2
                 }
                 return BulletAttack.DefaultHitCallbackImplementation(bulletAttack, ref hitInfo);
             }
-            EyelanderSkillDef = SwordInit(Eyelander, typeof(DemoSword), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoEyelanderSkillIcon.png"), "DemoEyelander", "DEMOMAN_EYELANDER_NAME", "DEMOMAN_EYELANDER_DESC");
+            EyelanderSkillDef = SwordInit(Eyelander, typeof(DemoSword), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoEyelanderSkillIcon.png"), "DemoEyelander", "DEMOMAN_EYELANDER_NAME", "DEMOMAN_EYELANDER_DESC", new string[] { "DEMOMAN_EYELANDER_KEY" });
             LanguageAPI.Add("DEMOMAN_EYELANDER_NAME", "Eyelander");
-            GenerateSwordDescriptionToken("DEMOMAN_EYELANDER_DESC", Eyelander, "Eyelander is a weakaning sword, but generates Boss Reward on champion kill", "Passive: Reduces base damage and health by 25%. Reduces movement speed by 1m/s");
+            LanguageAPI.Add("DEMOMAN_EYELANDER_DESC", "Eyelander is a weakaning sword, but generates Boss Reward on champion kill.");
+            GenerateSwordKeywordToken("DEMOMAN_EYELANDER_KEY", Eyelander, "", "On champion kill: Generate boss reward.\nPassive: Reduces base damage and health by 25%. Reduces movement speed by 1m/s.");
 
             LanguageAPI.Add("DEMOMAN_DEFLECTOR_NAME", "Deflector");
             LanguageAPI.Add("DEMOMAN_DEFLECTOR_DESC", $"Feedbacker.");
-            PillLauncherSkillDef = GrenadeLauncherInit(typeof(PillLauncher), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoPillSkillIcon.png"), "DemoPillLauncher", "DEMOMAN_PILLLAUNCHER_NAME", "DEMOMAN_PILLLAUNCHER_DESC", false, 4, 4, 1, 4, 1);
-            RocketLauncherSkillDef = GrenadeLauncherInit(typeof(RocketLauncher), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoRocketSkillIcon.png"), "DemoRocketLauncher", "DEMOMAN_ROCKETLAUNCHER_NAME", "DEMOMAN_ROCKETLAUNCHER_DESC", false, 3, 4, 1, 3, 1);
-            BombLauncherSkillDef = GrenadeLauncherInit(typeof(BombLauncher), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoBombSkillIcon.png"), "DemoBombLauncher", "DEMOMAN_BOMBLAUNCHER_NAME", "DEMOMAN_BOMBLAUNCHER_DESC", false, 4, 4, 1, 4, 1);
+            PillLauncherSkillDef = GrenadeLauncherInit(typeof(PillLauncher), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoPillSkillIcon.png"), "DemoPillLauncher", "DEMOMAN_PILLLAUNCHER_NAME", "DEMOMAN_PILLLAUNCHER_DESC", new string[] { "DEMOMAN_PILLLAUNCHER_KEY" }, false, 4, 3f, 1, 6, 1);
+            RocketLauncherSkillDef = GrenadeLauncherInit(typeof(RocketLauncher), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoRocketSkillIcon.png"), "DemoRocketLauncher", "DEMOMAN_ROCKETLAUNCHER_NAME", "DEMOMAN_ROCKETLAUNCHER_DESC", new string[] { "DEMOMAN_ROCKETLAUNCHER_KEY" }, false, 3, 3f, 1, 4, 1);
+            BombLauncherSkillDef = GrenadeLauncherInit(typeof(BombLauncher), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoBombSkillIcon.png"), "DemoBombLauncher", "DEMOMAN_BOMBLAUNCHER_NAME", "DEMOMAN_BOMBLAUNCHER_DESC", new string[] { "DEMOMAN_BOMBLAUNCHER_KEY" }, false, 4, 3f, 1, 6, 1);
             BombProjectile.GetComponent<BombComponent>().seekerState = BombLauncherSkillDef.activationState;
-            StickyLauncherSkillDef = GrenadeLauncherInit(typeof(StickyLauncher), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoStickySkillIcon.png"), "DemoStickyLauncher", "DEMOMAN_STICKYLAUNCHER_NAME", "DEMOMAN_STICKYLAUNCHER_DESC", true, 8, 1, 1);
-            JumperLauncherSkillDef = GrenadeLauncherInit(typeof(JumperLauncher), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoJumperStickySkillIcon.png"), "DemoJumperLauncher", "DEMOMAN_JUMPERLAUNCHER_NAME", "DEMOMAN_JUMPERLAUNCHER_DESC", true, 8, 1, 1);
-            HookLauncherSkillDef = GrenadeLauncherInit(typeof(HookLauncher), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoHookSkillIcon.png"), "DemoHookLauncher", "DEMOMAN_HOOKLAUNCHER_NAME", "DEMOMAN_HOOKLAUNCHER_DESC", false, 1, 6, 1, 1, 1);
+            StickyLauncherSkillDef = GrenadeLauncherInit(typeof(StickyLauncher), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoStickySkillIcon.png"), "DemoStickyLauncher", "DEMOMAN_STICKYLAUNCHER_NAME", "DEMOMAN_STICKYLAUNCHER_DESC", new string[] { "DEMOMAN_STICKYLAUNCHER_KEY" }, true, 8, 1.1f, 1);
+            JumperLauncherSkillDef = GrenadeLauncherInit(typeof(JumperLauncher), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoJumperStickySkillIcon.png"), "DemoJumperLauncher", "DEMOMAN_JUMPERLAUNCHER_NAME", "DEMOMAN_JUMPERLAUNCHER_DESC", new string[] { "DEMOMAN_JUMPERLAUNCHER_KEY" }, true, 8, 1.1f, 1);
+            HookLauncherSkillDef = GrenadeLauncherInit(typeof(HookLauncher), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoHookSkillIcon.png"), "DemoHookLauncher", "DEMOMAN_HOOKLAUNCHER_NAME", "DEMOMAN_HOOKLAUNCHER_DESC", new string[] { "DEMOMAN_HOOKLAUNCHER_KEY" }, false, 1, 6, 1, 1, 1);
             HookProjectile.GetComponent<HookComponent>().seekerState = HookLauncherSkillDef.activationState;
             //NukeLauncherSkillDef = GrenadeLauncherInit(typeof(NukeLauncher), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoNukeSkillIcon.png"), "DemoNukeLauncher", "DEMOMAN_ROCKETLAUNCHER_NAME", "DEMOMAN_ROCKETLAUNCHER_DESC", false, 1, 60, 1, 1, 1);
 
             //QuickiebombLauncherSkillDef = GrenadeLauncherInit(typeof(QuickiebombLauncher), "DEMOMAN_QUICKIEBOMBLAUNCHER_NAME", "DEMOMAN_QUICKIEBOMBLAUNCHER_DESC", true, 4, 1, 1);
-            MineLayerSkillDef = GrenadeLauncherInit(typeof(MineLayer), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoMineSkillIcon.png"), "DemoMineLayer", "DEMOMAN_MINELAYER_NAME", "DEMOMAN_MINELAYER_DESC", true, 8, 1, 1);
+            MineLayerSkillDef = GrenadeLauncherInit(typeof(MineLayer), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoMineSkillIcon.png"), "DemoMineLayer", "DEMOMAN_MINELAYER_NAME", "DEMOMAN_MINELAYER_DESC", new string[] { "DEMOMAN_MINELAYER_KEY" }, true, 8, 1, 1);
             LanguageAPI.Add("DEMOMAN_MINELAYER_NAME", "Mine Layer");
-            GenerateGrenadeDescriptionToken("DEMOMAN_MINELAYER_DESC", MineProjectile, MineLayerSkillDef, new MineLayer(), "Mines detonate automatically on enemy contact.");
-            AntigravLauncherSkillDef = GrenadeLauncherInit(typeof(AntigravLauncher), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoAntigravBombSkillIcon.png"), "DemoAntigravityBombLauncher", "DEMOMAN_QUICKIEBOMBLAUNCHER_NAME", "DEMOMAN_QUICKIEBOMBLAUNCHER_DESC", true, 4, 1, 1);
+            GrenadeLauncher mineDesc = new MineLayer();
+            LanguageAPI.Add("DEMOMAN_MINELAYER_DESC", "Fires a sticky trap with remote and proximity detonation that sticks on impact for " + LangueagePrefix((mineDesc.damage * 100).ToString() + "%", LanguagePrefixEnum.Damage) + " damage.");
+            GenerateGrenadeKeywordToken("DEMOMAN_MINELAYER_KEY", MineProjectile, MineLayerSkillDef, mineDesc, "Mines detonate automatically on enemy contact.");
+            AntigravLauncherSkillDef = GrenadeLauncherInit(typeof(AntigravLauncher), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoAntigravBombSkillIcon.png"), "DemoAntigravityBombLauncher", "DEMOMAN_QUICKIEBOMBLAUNCHER_NAME", "DEMOMAN_QUICKIEBOMBLAUNCHER_DESC", new string[] { "DEMOMAN_QUICKIEBOMBLAUNCHER_KEY" }, true, 4, 1.1f, 1);
             LanguageAPI.Add("DEMOMAN_PILLLAUNCHER_NAME", "Grenade Launcher");
-            GenerateGrenadeDescriptionToken("DEMOMAN_PILLLAUNCHER_DESC", PillProjectile, PillLauncherSkillDef, new PillLauncher(), "Classic choice.");
+            mineDesc = new PillLauncher();
+            LanguageAPI.Add("DEMOMAN_PILLLAUNCHER_DESC", "Fires a rolling projectile for " + LangueagePrefix((mineDesc.damage * 100).ToString() + "%", LanguagePrefixEnum.Damage) + " damage.");
+            GenerateGrenadeKeywordToken("DEMOMAN_PILLLAUNCHER_KEY", PillProjectile, PillLauncherSkillDef, mineDesc, "Grenade Laucnher.");
             LanguageAPI.Add("DEMOMAN_ROCKETLAUNCHER_NAME", "Rocket Launcher");
-            GenerateGrenadeDescriptionToken("DEMOMAN_ROCKETLAUNCHER_DESC", RocketProjectile, RocketLauncherSkillDef, new RocketLauncher(), "Rockets explode on contact.");
+            LanguageAPI.Add("DEMOMAN_ROCKETLAUNCHER_DESC", "Fires a explosive projectile for " + LangueagePrefix((mineDesc.damage * 100).ToString() + "%", LanguagePrefixEnum.Damage) + " damage.");
+            mineDesc = new RocketLauncher();
+            GenerateGrenadeKeywordToken("DEMOMAN_ROCKETLAUNCHER_KEY", RocketProjectile, RocketLauncherSkillDef, mineDesc, "Rocket Launcher.");
             LanguageAPI.Add("DEMOMAN_HOOKLAUNCHER_NAME", "Hook Launcher");
-            GenerateGrenadeDescriptionToken("DEMOMAN_HOOKLAUNCHER_DESC", HookProjectile, HookLauncherSkillDef, new HookLauncher(), "Trades damaging projectiles with a grapple hook. Grapple hook can pickup and throw enemies");
+            LanguageAPI.Add("DEMOMAN_HOOKLAUNCHER_DESC", "Fires a fast projectile that sticks on impact and pulls user to itself.");
+            GenerateGrenadeKeywordToken("DEMOMAN_HOOKLAUNCHER_KEY", HookProjectile, HookLauncherSkillDef, mineDesc, "Hook Launcher.");
             //LanguageAPI.Add("DEMOMAN_ROCKETLAUNCHER_DESC", $"Fire your head cannon.");
             LanguageAPI.Add("DEMOMAN_BOMBLAUNCHER_NAME", "Bomb Cannon");
-            GenerateGrenadeDescriptionToken("DEMOMAN_BOMBLAUNCHER_DESC", BombProjectile, BombLauncherSkillDef, new BombLauncher(), "Bombs deal immediate contact damage and push the target on hit. Bombs lifetime scale with charge");
+            mineDesc = new BombLauncher();
+            LanguageAPI.Add("DEMOMAN_BOMBLAUNCHER_DESC", "Fires a bomb for " + LangueagePrefix((mineDesc.damage * 100).ToString() + "%", LanguagePrefixEnum.Damage) + " damage that deals additional contact damage. Lifetime can be reduced by charging");
+            GenerateGrenadeKeywordToken("DEMOMAN_BOMBLAUNCHER_KEY", BombProjectile, BombLauncherSkillDef, mineDesc, "Bomb Launcher.");
             //LanguageAPI.Add("DEMOMAN_BOMBLAUNCHER_DESC", $"Fire your head cannon.");
             LanguageAPI.Add("DEMOMAN_STICKYLAUNCHER_NAME", "Sticky Launcher");
-            GenerateGrenadeDescriptionToken("DEMOMAN_STICKYLAUNCHER_DESC", StickyProjectile, StickyLauncherSkillDef, new StickyLauncher(), "Classic choice");
+            mineDesc = new StickyLauncher();
+            LanguageAPI.Add("DEMOMAN_STICKYLAUNCHER_DESC", "Fires a sticky trap with remote detonation that sticks on impact for " + LangueagePrefix((mineDesc.damage * 100).ToString() + "%", LanguagePrefixEnum.Damage) + " damage.");
+            GenerateGrenadeKeywordToken("DEMOMAN_STICKYLAUNCHER_KEY", StickyProjectile, StickyLauncherSkillDef, mineDesc, "Sticky Launcher.");
             LanguageAPI.Add("DEMOMAN_JUMPERLAUNCHER_NAME", "Jumper Launcher");
-            GenerateGrenadeDescriptionToken("DEMOMAN_JUMPERLAUNCHER_DESC", JumperProjectile, JumperLauncherSkillDef, new JumperLauncher(), "Trades all damage for knockback. Explosions stun enemies");
+            LanguageAPI.Add("DEMOMAN_JUMPERLAUNCHER_DESC", "Fires a sticky trap with remote detonation that sticks on impact. Trades all damage for additional knockback");
+            GenerateGrenadeKeywordToken("DEMOMAN_JUMPERLAUNCHER_KEY", JumperProjectile, JumperLauncherSkillDef, mineDesc, "Jumper Launcher.");
             //LanguageAPI.Add("DEMOMAN_STICKYLAUNCHER_DESC", $"Fire your sticky launcher.");
             LanguageAPI.Add("DEMOMAN_QUICKIEBOMBLAUNCHER_NAME", "Antigrav Launcher");
-            GenerateGrenadeDescriptionToken("DEMOMAN_QUICKIEBOMBLAUNCHER_DESC", AntigravProjectile, AntigravLauncherSkillDef, new AntigravLauncher(), "UNFINISHED. Unique explosion is planned");
+            mineDesc = new AntigravLauncher();
+            LanguageAPI.Add("DEMOMAN_QUICKIEBOMBLAUNCHER_DESC", "Fires a bouncing trap with remote detonation that bounces on impact for " + LangueagePrefix((mineDesc.damage * 100).ToString() + "%", LanguagePrefixEnum.Damage) + " damage. Has no gravitation");
+            GenerateGrenadeKeywordToken("DEMOMAN_QUICKIEBOMBLAUNCHER_KEY", AntigravProjectile, AntigravLauncherSkillDef, mineDesc, "Antigrav Launcher.");
             //LanguageAPI.Add("DEMOMAN_QUICKIEBOMBLAUNCHER_DESC", $"Fire your quickiebomb launcher.");
-            HeavyShieldSkillDef = ShieldChargeInit(typeof(ShieldChargeHeavy), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoHeavyShieldSkillIcon.png"), "DemoHeavyShield", "DEMOMAN_SHIELDHEAVY_NAME", "DEMOMAN_SHIELDHEAVY_DESC");
-            LightShieldSkillDef = ShieldChargeInit(typeof(ShieldChargeLight), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoLightShieldSkillIcon.png"), "DemoHeavyShield", "DEMOMAN_SHIELDLIGHT_NAME", "DEMOMAN_SHIELDLIGHT_DESC");
+            HeavyShieldSkillDef = ShieldChargeInit(typeof(ShieldChargeHeavy), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoHeavyShieldSkillIcon.png"), "DemoHeavyShield", "DEMOMAN_SHIELDHEAVY_NAME", "DEMOMAN_SHIELDHEAVY_DESC", new string[] { "DEMOMAN_SHIELDHEAVY_KEY" });
+            LightShieldSkillDef = ShieldChargeInit(typeof(ShieldChargeLight), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoLightShieldSkillIcon.png"), "DemoHeavyShield", "DEMOMAN_SHIELDLIGHT_NAME", "DEMOMAN_SHIELDLIGHT_DESC", new string[] { "DEMOMAN_SHIELDLIGHT_KEY" });
             //SpaceShield = ShieldChargeInit(typeof(ShieldChargeAntigravity), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoHookSkillIcon.png"), "DemoFlyingShield", "DEMOMAN_SHIELDANTIGRAVITY_NAME", "DEMOMAN_SHIELDANTIGRAVITY_DESC");
             LanguageAPI.Add("DEMOMAN_SHIELDHEAVY_NAME", "Heavy Shield");
-            LanguageAPI.Add("DEMOMAN_SHIELDHEAVY_DESC", $"DESCRIPTION TO BE FINISHED. In short: gives 25 armor passively, 100 armour on charge. Has less turning control. Green stage: 0% extra sword damage. Yellow stage: 35% extra sword damage. Red stage: 300% extra sword damage");
+            LanguageAPI.Add("DEMOMAN_SHIELDHEAVY_DESC", "Charges user in a straight line with low control. Greatly increases sword damage based on charge stage.");
+            GenerateShieldKeywordToken("DEMOMAN_SHIELDHEAVY_KEY", new ShieldChargeHeavy(), "Heavy Shield.");
             LanguageAPI.Add("DEMOMAN_SHIELDLIGHT_NAME", "Light Shield");
-            LanguageAPI.Add("DEMOMAN_SHIELDLIGHT_DESC", $"DESCRIPTION TO BE FINISHED. In short: gives no armor. Has full turning control. Only has green and yellow stages");
+            LanguageAPI.Add("DEMOMAN_SHIELDLIGHT_DESC", "Charges user in a straight line with full control. Slightly increases sword damage based on charge stage.");
+            GenerateShieldKeywordToken("DEMOMAN_SHIELDLIGHT_KEY", new ShieldChargeLight(), "Light Shield.");
             LanguageAPI.Add("DEMOMAN_SHIELDANTIGRAVITY_NAME", "Antigravity Shield");
             LanguageAPI.Add("DEMOMAN_SHIELDANTIGRAVITY_DESC", $"charge.");
             DetonateSkillDef = DetonateInit();
@@ -2470,10 +2726,10 @@ namespace DemomanRor2
             //AltSpecialOneSkillDef = AltSpecialInit(SpecialOneSkillDef, typeof(SpecialOneSticky), SpecialOneSkillDef.icon, "DemoBombTornado", "DEMOMAN_SPECIALONEALT_NAME", "DEMOMAN_SPECIALTWOALT_DESC", "Extra");
             SpecialTwoSkillDef = SpecialInit(typeof(UltraInstinctRedirect), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoSpecial2SKillIcon.png"), "DemoSwordStorm", "DEMOMAN_SPECIALTWO_NAME", "DEMOMAN_SPECIALTWO_DESC", "Extra");
             //AltSpecialTwoSkillDef = AltSpecialInit(SpecialTwoSkillDef, typeof(UltraInstinctSticky), SpecialTwoSkillDef.icon, "DemoBombStorm", "DEMOMAN_SPECIALTWOALT_NAME", "DEMOMAN_SPECIALTWOALT_DESC", "Extra");
-            SlamSkillDef = SpecialInit(typeof(Slam), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoSlamSkillIcon.png"), "DemoSlam", "DEMOMAN_SLAM_NAME", "DEMOMAN_SLAM_DESC", "Extra");
+            SlamSkillDef = SpecialInit(typeof(Slam), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoSlamSkillIcon.png"), "DemoSlam", "DEMOMAN_SLAM_NAME", "DEMOMAN_SLAM_DESC", "Extra", 6f);
             //LockInSkillDef = SpecialInit(typeof(LockIn), null, "DemoLockIn", "DEMOMAN_LOCKIN_NAME", "DEMOMAN_LOCKIN_DESC", "Extra");
             LanguageAPI.Add("DEMOMAN_SPECIALONE_NAME", "Whirlwind");
-            LanguageAPI.Add("DEMOMAN_SPECIALONE_DESC", $"Sword style: Enter a whirlwind state where you hit all enemies withtin sword range every " + LangueagePrefix("0.25", LanguagePrefixEnum.Damage) + " seconds. Sword statistics retained." +
+            LanguageAPI.Add("DEMOMAN_SPECIALONE_DESC", $"Sword style: Enter a whirlwind state where you hit all enemies withtin the sword range every " + LangueagePrefix("0.2", LanguagePrefixEnum.Damage) + " seconds for a half of the sword damage for 3.5 seconds." +
                 "\nRanged style: Quickly fire traps. Trap statistics retained");
             //LanguageAPI.Add("DEMOMAN_SPECIALONEALT_NAME", "Trap Barrage");
             //LanguageAPI.Add("DEMOMAN_SPECIALONEALT_DESC", $"Stick.");
@@ -2485,7 +2741,7 @@ namespace DemomanRor2
             //LanguageAPI.Add("DEMOMAN_SPECIALTWOALT_DESC", $"Stick.");
             ManthreadsSkillDef = PassiveInit(ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoMannthreadsSkillIcon.png"), "DemoStompPassive", "DEMOMAN_STOMPSKILL_NAME", "DEMOMAN_STOMPSKILL_DESC");
             LanguageAPI.Add("DEMOMAN_STOMPSKILL_NAME", "Hell support");
-            LanguageAPI.Add("DEMOMAN_STOMPSKILL_NAME_DESC", $"Negate all fall damage.");
+            LanguageAPI.Add("DEMOMAN_STOMPSKILL_DESC", $"Negate all fall damage.");
             foreach (var variant in demoStickyFamily.variants)
             {
                 stickySkills.Add(variant.skillDef);
@@ -2508,7 +2764,7 @@ namespace DemomanRor2
                 viewableNode = new ViewablesCatalog.Node(skillDef.skillNameToken, false, null)
             };
         }
-        public static SkillDef SwordInit(DemoSwordClass demoSword, Type state, Sprite sprite, string name, string nameToken, string descToken, int requiredStock = 0, int rechargeStock = 1, int stockToConsume = 0, float rechargeInterval = 0f, int baseStock = 1)
+        public static SkillDef SwordInit(DemoSwordClass demoSword, Type state, Sprite sprite, string name, string nameToken, string descToken, string[] keyWords, int requiredStock = 0, int rechargeStock = 1, int stockToConsume = 0, float rechargeInterval = 0f, int baseStock = 1)
         {
             
             GameObject commandoBodyPrefab = Main.DemoBody;
@@ -2518,9 +2774,9 @@ namespace DemomanRor2
             mySkillDef.activationStateMachineName = "Weapon";
             mySkillDef.baseMaxStock = baseStock;
             mySkillDef.baseRechargeInterval = rechargeInterval;
-            mySkillDef.beginSkillCooldownOnSkillEnd = true;
+            mySkillDef.beginSkillCooldownOnSkillEnd = false;
             mySkillDef.canceledFromSprinting = false;
-            mySkillDef.cancelSprintingOnActivation = true;
+            mySkillDef.cancelSprintingOnActivation = false;
             mySkillDef.fullRestockOnAssign = true;
             mySkillDef.interruptPriority = InterruptPriority.Any;
             mySkillDef.isCombatSkill = true;
@@ -2532,6 +2788,7 @@ namespace DemomanRor2
             mySkillDef.skillDescriptionToken = descToken;
             mySkillDef.skillName = nameToken;
             mySkillDef.skillNameToken = nameToken;
+            mySkillDef.keywordTokens = keyWords;
             (mySkillDef as ScriptableObject).name = name;
             ContentAddition.AddSkillDef(mySkillDef);
             SkillLocator skillLocator = commandoBodyPrefab.GetComponent<SkillLocator>();
@@ -2540,7 +2797,7 @@ namespace DemomanRor2
             swordDictionary.Add(mySkillDef, demoSword);
             return mySkillDef;
         }
-        private static SkillDef GrenadeLauncherInit(Type state, Sprite sprite, string name, string nameToken, string descToken, bool isSticky = false, int baseStocks = 4, float rechargeInterval = 4f, int requiredStock = 1, int rechargeStock = 1, int stockToConsume = 1)
+        private static SkillDef GrenadeLauncherInit(Type state, Sprite sprite, string name, string nameToken, string descToken, string[] keyWordTokens, bool isSticky = false, int baseStocks = 4, float rechargeInterval = 4f, int requiredStock = 1, int rechargeStock = 1, int stockToConsume = 1)
         {
             GameObject commandoBodyPrefab = DemoBody;
 
@@ -2572,6 +2829,7 @@ namespace DemomanRor2
             mySkillDef.skillDescriptionToken = descToken;
             mySkillDef.skillName = nameToken;
             mySkillDef.skillNameToken = nameToken;
+            mySkillDef.keywordTokens = keyWordTokens;
             (mySkillDef as ScriptableObject).name = name;
             ContentAddition.AddSkillDef(mySkillDef);
 
@@ -2588,7 +2846,7 @@ namespace DemomanRor2
             AddSkillToFamily(ref skillFamily, mySkillDef);
             return mySkillDef;
         }
-        private static SkillDef ShieldChargeInit(Type state, Sprite sprite, string name, string nameToken, string descToken, int baseStocks = 1, float rechargeInterval = 6f, int requiredStock = 1, int rechargeStock = 1, int stockToConsume = 1)
+        private static SkillDef ShieldChargeInit(Type state, Sprite sprite, string name, string nameToken, string descToken, string[] keywords, int baseStocks = 1, float rechargeInterval = 6f, int requiredStock = 1, int rechargeStock = 1, int stockToConsume = 1)
         {
             GameObject commandoBodyPrefab = DemoBody;
             SkillDef mySkillDef = ScriptableObject.CreateInstance<SkillDef>();
@@ -2610,6 +2868,7 @@ namespace DemomanRor2
             mySkillDef.skillDescriptionToken = descToken;
             mySkillDef.skillName = nameToken;
             mySkillDef.skillNameToken = nameToken;
+            mySkillDef.keywordTokens = keywords;
             (mySkillDef as ScriptableObject).name = name;
             ContentAddition.AddSkillDef(mySkillDef);
             SkillLocator skillLocator = commandoBodyPrefab.GetComponent<SkillLocator>();
@@ -2618,7 +2877,7 @@ namespace DemomanRor2
             AddSkillToFamily(ref skillFamily, mySkillDef);
             return mySkillDef;
         }
-        private static SkillDef SpecialInit(Type state, Sprite sprite, string name, string nameToken, string descToken, string stateName, float recharge = 10f, bool beginSkillCooldownOnSkillEnd = true)
+        private static SkillDef SpecialInit(Type state, Sprite sprite, string name, string nameToken, string descToken, string stateName, float recharge = 12f, bool beginSkillCooldownOnSkillEnd = true)
         {
             GameObject commandoBodyPrefab = DemoBody;
             SkillDef mySkillDef = ScriptableObject.CreateInstance<SkillDef>();
@@ -2651,7 +2910,7 @@ namespace DemomanRor2
         {
             //GameObject commandoBodyPrefab = DemomanSurvivor.survivor;
             LanguageAPI.Add("DEMOMAN_DETONATE_NAME", "Detonate");
-            LanguageAPI.Add("DEMOMAN_DETONATE_DESC", $"Detonate.");
+            LanguageAPI.Add("DEMOMAN_DETONATE_DESC", $"Detonate all placed traps.");
             SkillDef mySkillDef = ScriptableObject.CreateInstance<SkillDef>();
             mySkillDef.activationState = new SerializableEntityStateType(typeof(Detonate));
             mySkillDef.activationStateMachineName = "Extra";
@@ -2759,17 +3018,17 @@ namespace DemomanRor2
             ContentAddition.AddSkillDef(mySkillDef);
             return mySkillDef;
         }
-        public class DemoSwordClass(BulletAttack bulletAttack, float swingUpTime = 0.5f, float swingDownTime = 0.5f, GameObject swordObject = null)
+        public class DemoSwordClass(BulletAttack bulletAttack, float swingUpTime = 0.4f, float swingDownTime = 0.4f, GameObject swordObject = null)
         {
             public BulletAttack bulletAttack = bulletAttack;
             public float swingUpTime = swingUpTime;
             public float swingDownTime = swingDownTime;
             public GameObject swordObject = swordObject;
         }
-        public class DemoStickyClass(GameObject stickyObject, float damage)
+        public class DemoStickyClass(GameObject stickyObject, GrenadeLauncher stickyState)
         {
             public GameObject stickyObject = stickyObject;
-            public float damage = damage;
+            public GrenadeLauncher stickyState = stickyState;
         }
         private static void InitStates()
         {
@@ -2848,7 +3107,7 @@ namespace DemomanRor2
             
             swordDictionary.Add(EyelanderSkillDef, Eyelander);
         }
-        public static void GenerateSwordDescriptionToken(string token, DemoSwordClass demoSword, string before = "", string after = "")
+        public static void GenerateSwordKeywordToken(string token, DemoSwordClass demoSword, string before = "", string after = "")
         {
             LanguageAPI.Add(token, $"" +
                 before +
@@ -2859,10 +3118,10 @@ namespace DemomanRor2
                 "Range: " + LangueagePrefix(demoSword.bulletAttack.maxDistance.ToString() + "m", LanguagePrefixEnum.Damage) + "\n" +
                 "Piercing: " + LangueagePrefix(demoSword.bulletAttack.stopperMask == (demoSword.bulletAttack.stopperMask | 1 << LayerIndex.entityPrecise.mask) ? "False" : "True", LanguagePrefixEnum.Damage) + "\n" +
                 "Radius: " + LangueagePrefix(demoSword.bulletAttack.radius.ToString() + "m", LanguagePrefixEnum.Damage) + "\n" +
-                "Proc: " + LangueagePrefix(demoSword.bulletAttack.procCoefficient.ToString(), LanguagePrefixEnum.Damage) + "\n" +
-                after);
+                "Proc: " + LangueagePrefix(demoSword.bulletAttack.procCoefficient.ToString(), LanguagePrefixEnum.Damage) + (after != "" ? "\n" : "") + after);
+            
         }
-        public static void GenerateGrenadeDescriptionToken(string token, GameObject projectile, SkillDef skillDef, GrenadeLauncher grenadeLauncher, string before = "", string after = "")
+        public static void GenerateGrenadeKeywordToken(string token, GameObject projectile, SkillDef skillDef, GrenadeLauncher grenadeLauncher, string before = "", string after = "")
         {
             ProjectileImpactExplosion projectileImpactExplosion = projectile.GetComponent<ProjectileImpactExplosion>();
             DemoExplosionComponent demoExplosionComponent = projectile.GetComponent<DemoExplosionComponent>();
@@ -2884,14 +3143,17 @@ namespace DemomanRor2
             {
                 //explosionString += "\n";
                 explosionString += "" +
-                    "Explosion radius: " + LangueagePrefix((projectileImpactExplosion.blastRadius).ToString(), LanguagePrefixEnum.Damage) + "\n" +
-                    "Projectile lifetime: " + LangueagePrefix((projectileImpactExplosion.lifetime).ToString(), LanguagePrefixEnum.Damage) + "\n";
+                    "Explosion radius: " + LangueagePrefix((projectileImpactExplosion.blastRadius).ToString() + "m", LanguagePrefixEnum.Damage) + "\n" +
+                    "Projectile lifetime: " + LangueagePrefix((projectileImpactExplosion.lifetime).ToString() + (projectileImpactExplosion.lifetime == float.PositiveInfinity ? "" : "s"), LanguagePrefixEnum.Damage) + "\n";
             }
             if (stickyComponent)
             {
                 explosionString += "" +
                     "Can stick: " + LangueagePrefix(stickyComponent.isStickable ? "True" : "False", LanguagePrefixEnum.Damage) + "\n" +
                     "Arm time: " + LangueagePrefix((stickyComponent.armTime).ToString() + "s", LanguagePrefixEnum.Damage) + "\n" +
+                    "Full arm time: " + LangueagePrefix((stickyComponent.fullArmTime).ToString() + "s", LanguagePrefixEnum.Damage) + "\n" +
+                    "Damage increase: " + LangueagePrefix((stickyComponent.damageIncrease * 100).ToString() + "%", LanguagePrefixEnum.Damage) + "\n" +
+                    "Radius increase: " + LangueagePrefix((stickyComponent.radiusIncrease * 100).ToString() + "%", LanguagePrefixEnum.Damage) + "\n" +
                     "Detonation time: " + LangueagePrefix((stickyComponent.detonationTime).ToString() + "s", LanguagePrefixEnum.Damage) + "\n" +
                     "";
             }
@@ -2912,30 +3174,32 @@ namespace DemomanRor2
                 "Reload time: " + LangueagePrefix((skillDef.baseRechargeInterval).ToString(), LanguagePrefixEnum.Damage) + "\n" +
                 "Stocks to reload: " + LangueagePrefix((skillDef.rechargeStock).ToString(), LanguagePrefixEnum.Damage) + "\n" +
                 "Charge time: " + LangueagePrefix(grenadeLauncher.canBeCharged ? ((grenadeLauncher.chargeCap).ToString() + "s") : "Can't be charged", LanguagePrefixEnum.Damage) + "\n" +
-                explosionString);
+                explosionString + (after != ""? "\n" :"") + after);
         }
-        //public static void GenerateShieldDescriptionToken(string token, ShieldCharge shieldCharge, string before = "", string after = "")
-        //{
-        //    LanguageAPI.Add(token, $"" +
-        //        before +
-        //        "\n\n" +
-        //        "Base damage: " + LangueagePrefix((grenadeLauncher.damage * 100).ToString() + "%", LanguagePrefixEnum.Damage) + "\n" +
-        //        "Fire rate: " + LangueagePrefix((grenadeLauncher.fireRate).ToString() + "s", LanguagePrefixEnum.Damage) + "\n" +
-        //        "Base stocks: " + LangueagePrefix((skillDef.baseMaxStock).ToString(), LanguagePrefixEnum.Damage) + "\n" +
-        //        "Reload time: " + LangueagePrefix((skillDef.baseRechargeInterval).ToString(), LanguagePrefixEnum.Damage) + "\n" +
-        //        "Stocks to reload: " + LangueagePrefix((skillDef.rechargeStock).ToString(), LanguagePrefixEnum.Damage) + "\n" +
-        //        "Charge time: " + LangueagePrefix(grenadeLauncher.canBeCharged ? ((grenadeLauncher.chargeCap).ToString() + "s") : "Can't be charged", LanguagePrefixEnum.Damage) + "\n" +
-        //        explosionString);
-        //}
+        public static void GenerateShieldKeywordToken(string token, ShieldCharge shieldCharge, string before = "", string after = "")
+        {
+            LanguageAPI.Add(token, $"" +
+                before +
+                "\n\n" +
+                "Armour on charge: " + LangueagePrefix((shieldCharge.armor).ToString(), LanguagePrefixEnum.Damage) + "\n" +
+                "Charge time: " + LangueagePrefix(shieldCharge.chargeMaxMeter.ToString() + "s", LanguagePrefixEnum.Damage) + "\n" +
+                "Charge control: " + LangueagePrefix(shieldCharge.chargeControl.ToString() + "radian/second", LanguagePrefixEnum.Damage) + "\n" +
+                "Speed increase: " + LangueagePrefix((shieldCharge.chargeSpeed * 100).ToString() + "%", LanguagePrefixEnum.Damage) + "\n" +
+                "Buff on charge: " + LangueagePrefix((shieldCharge.buffOnCharge.name).ToString(), LanguagePrefixEnum.Damage) + "\n" +
+                "Stage one percentage time: " + LangueagePrefix((shieldCharge.stageOnePercentage).ToString() + "%", LanguagePrefixEnum.Damage) + "\n" +
+                "Stage one buff amount: " + LangueagePrefix((shieldCharge.stageOneBuffs).ToString(), LanguagePrefixEnum.Damage) + "\n" +
+                "Stage two percentage time: " + LangueagePrefix((shieldCharge.stageTwoPercentage).ToString() + "%", LanguagePrefixEnum.Damage) + "\n" +
+                "Stage two buff amount: " + LangueagePrefix((shieldCharge.stageTwoBuffs).ToString(), LanguagePrefixEnum.Damage) + (after != "" ? "\n" : "") + after);
+        }
         private static void InitProjectiles()
         {
-            StickyLauncherObject = new DemoStickyClass(StickyProjectile, 6f);
+            StickyLauncherObject = new DemoStickyClass(StickyProjectile, new StickyLauncher());
             bombProjectiles.Add(StickyLauncherSkillDef, StickyLauncherObject);
-            MineLayerObject = new DemoStickyClass(MineProjectile, 9f);
+            MineLayerObject = new DemoStickyClass(MineProjectile, new MineLayer());
             bombProjectiles.Add(MineLayerSkillDef, MineLayerObject);
-            AntigravLauncherObject = new DemoStickyClass(AntigravProjectile, 7f);
+            AntigravLauncherObject = new DemoStickyClass(AntigravProjectile, new AntigravLauncher());
             bombProjectiles.Add(AntigravLauncherSkillDef, AntigravLauncherObject);
-            JumperLauncherObject = new DemoStickyClass(JumperProjectile, 0f);
+            JumperLauncherObject = new DemoStickyClass(JumperProjectile, new JumperLauncher());
             bombProjectiles.Add(JumperLauncherSkillDef, JumperLauncherObject);
         }
         private static void InitShields()
@@ -2977,6 +3241,8 @@ namespace DemomanRor2
             public GameObject swingEffect = SwingEffect;
             public BulletAttack bulletAttack;
             public DemoSwordClass swordClass;
+            private GameObject swordTrail;
+            private GenericSkill utilitySkill;
             public override void OnEnter()
             {
                 base.OnEnter();
@@ -2984,6 +3250,7 @@ namespace DemomanRor2
                 {
                     swordClass = swordDictionary.ContainsKey(skillLocator.primary.skillDef) ? swordDictionary[skillLocator.primary.skillDef] : DefaultSword;
                     bulletAttack = ModifyAttack(swordClass.bulletAttack);
+                    utilitySkill = skillLocator.utility;
                 }
                 if (bulletAttack == null)
                 {
@@ -2992,7 +3259,7 @@ namespace DemomanRor2
                 if (stopwatch <= 0)
                 {
                     float animationTime = swordClass.swingUpTime + swordClass.swingDownTime;
-                    PlayAnimation("Gesture, Override", "Swing", "Slash.playbackRate", animationTime / base.attackSpeedStat);
+                    PlayAnimation("Gesture, Override", "Swing", "Slash.playbackRate", animationTime / base.attackSpeedStat, 0.3f);
                     base.StartAimMode();
                     stopwatch = swordClass.swingUpTime / base.attackSpeedStat;
                     fired = false;
@@ -3024,6 +3291,7 @@ namespace DemomanRor2
             public override void OnExit()
             {
                 base.OnExit();
+                if (swordTrail) Destroy(swordTrail);
 
             }
             public virtual BulletAttack ModifyAttack(BulletAttack bulletAttack)
@@ -3050,22 +3318,51 @@ namespace DemomanRor2
                     isCrit = isCrit,
                     origin = GetAimRay().origin,
                     owner = gameObject,
-                    hitCallback = bulletAttack.hitCallback,
+                    hitCallback = bulletAttack.hitCallback + ChargeOnHit,
 
                 };
                 return bulletAttack2;
             }
+            public virtual bool ChargeOnHit(BulletAttack bulletAttack, ref BulletAttack.BulletHit hitInfo)
+            {
+                if (hitInfo.hitHurtBox)
+                {
+                    if (utilitySkill && utilitySkill.stock < utilitySkill.maxStock)
+                    {
+
+                        utilitySkill.rechargeStopwatch += MathF.Min(utilitySkill.finalRechargeInterval - utilitySkill.rechargeStopwatch, 0.25f) * utilitySkill.finalRechargeInterval;
+                    }
+                    
+                }
+                return false;
+                //return BulletAttack.DefaultHitCallbackImplementation(bulletAttack, ref hitInfo);
+            }
             public virtual void SwingSword(BulletAttack bulletAttack)
             {
+                if (isAuthority)
+                    bulletAttack.Fire();
                 GameObject swingEffectcopy = GameObject.Instantiate(swingEffect);
                 swingEffectcopy.transform.position = inputBank ? inputBank.aimOrigin : transform.position;
                 swingEffectcopy.transform.rotation = Quaternion.LookRotation(inputBank ? inputBank.aimDirection : transform.forward);
-                ParticleSystem particleSystem = swingEffectcopy.transform.GetChild(0).GetComponent<ParticleSystem>();
-                var vel = particleSystem.velocityOverLifetime;
-                vel.speedModifier = bulletAttack.maxDistance;
+                List<ParticleSystem> particleSystems = new List<ParticleSystem>();
+                ParticleSystem particleSystem = swingEffectcopy.transform.Find("mainSwing").GetComponent<ParticleSystem>();
+                particleSystems.Add(particleSystem);
+                //ParticleSystem particleSystem2 = swingEffectcopy.transform.Find("mainSwing2").GetComponent<ParticleSystem>();
+                //particleSystems.Add(particleSystem2);
+                foreach (ParticleSystem particle in particleSystems)
+                {
+                    var vel = particleSystem.velocityOverLifetime;
+                    vel.speedModifier = bulletAttack.maxDistance;
+                    var size = particleSystem.main.startSizeY;
+                    size.constant = bulletAttack.radius;
+                    size.constantMax = bulletAttack.radius;
+                    size.constantMin = bulletAttack.radius;
+                }
+                
                 Util.PlaySound(DemoSwordSwingSound.playSoundString, gameObject);
-                if (isAuthority)
-                bulletAttack.Fire();
+                
+
+
             }
             public override InterruptPriority GetMinimumInterruptPriority()
             {
@@ -3085,7 +3382,10 @@ namespace DemomanRor2
             public Image chargeMeterHUD;
             public DemoComponent demoComponent;
             public abstract float stageOnePercentage { get; }
+            public abstract BuffDef buffOnCharge { get; }
+            public abstract int stageOneBuffs { get; }
             public abstract float stageTwoPercentage { get; }
+            public abstract int stageTwoBuffs { get; }
             public abstract float armor { get; }
             public float chargePercentage => chargeMeter / chargeMaxMeter;
             public Vector3 previousMoveVector;
@@ -3096,10 +3396,14 @@ namespace DemomanRor2
                 chargeVector = base.inputBank.aimDirection;
                 chargeVector.y = 0f;
                 chargeVector = chargeVector.normalized;
-                Util.CleanseBody(characterBody, true, false, false, true, true, false);
                 base.characterBody.isSprinting = true;
                 demoComponent = characterBody.GetComponent<DemoComponent>();
                 characterBody.armor += armor;
+                if (NetworkServer.active)
+                {
+                    Util.CleanseBody(characterBody, true, false, false, true, true, false);
+                }
+                
                 characterBody.RecalculateStats();
                 previousMoveVector = transform.position;
                 Util.PlaySound(DemoChargeWindUpSound.playSoundString, gameObject);
@@ -3145,11 +3449,11 @@ namespace DemomanRor2
                     else
                     {
                         HealthComponent healthComponent = hit.collider.GetComponent<HurtBox>()?.healthComponent;
-                        if (healthComponent)
+                        if (healthComponent && healthComponent.body.teamComponent.teamIndex != characterBody.teamComponent.teamIndex)
                         {
                             var bonk = new DamageInfo
                             {
-                                damage = damageStat * 3 * chargePercentage,
+                                damage = damageStat * 3 * (1 + chargePercentage),
                                 attacker = gameObject,
                                 canRejectForce = true,
                                 crit = false,
@@ -3190,19 +3494,32 @@ namespace DemomanRor2
             }
             public virtual void OnStageOne()
             {
-                characterBody.SetBuffCount(Main.ExtraSwordDamage.buffIndex, 35);
+                if (stageOneBuffs > 0)
+                {
+                    if (NetworkServer.active)
+                    {
+                        characterBody.SetBuffCount(buffOnCharge.buffIndex, stageOneBuffs);
+                    }
+                }
+                
             }
             public virtual void OnStageOneAuthority()
             {
-                if (chargeMeterHUD) chargeMeterHUD.color = Color.yellow;
+                if (chargeMeterHUD && stageOneBuffs > 0) chargeMeterHUD.color = Color.yellow;
             }
             public virtual void OnStageTwo()
             {
-                characterBody.SetBuffCount(Main.ExtraSwordDamage.buffIndex, 300);
+                if (stageTwoBuffs > 0)
+                {
+                    if (NetworkServer.active)
+                    {
+                        characterBody.SetBuffCount(buffOnCharge.buffIndex, stageTwoBuffs);
+                    }
+                }
             }
             public virtual void OnStageTwoAuthority()
             {
-                if (chargeMeterHUD) chargeMeterHUD.color = Color.red;
+                if (chargeMeterHUD && stageTwoBuffs > 0) chargeMeterHUD.color = Color.red;
             }
             public virtual void OnChargeEnd()
             {
@@ -3264,12 +3581,16 @@ namespace DemomanRor2
                     characterMotor.velocity += savedMoveVector / Time.fixedDeltaTime;
                     characterMotor.disableAirControlUntilCollision = true;
                 }
-                int buffCount = characterBody.GetBuffCount(ExtraSwordDamage);
-                characterBody.SetBuffCount(Main.ExtraSwordDamage.buffIndex, 0);
-                for (int i = 0; i < buffCount; i++)
+                if (NetworkServer.active)
                 {
-                    characterBody.AddTimedBuff(ExtraSwordDamage, 0.6f);
+                    int buffCount = characterBody.GetBuffCount(buffOnCharge);
+                    characterBody.SetBuffCount(buffOnCharge.buffIndex, 0);
+                    for (int i = 0; i < buffCount; i++)
+                    {
+                        characterBody.AddTimedBuff(buffOnCharge, 0.6f);
+                    }
                 }
+                
                 characterBody.RecalculateStats();
             }
             public virtual void OnExitAuthority()
@@ -3438,10 +3759,14 @@ namespace DemomanRor2
             {
 
             }
+            public virtual void IncreaseChargeOnFixedUpdate()
+            {
+                charge += GetDeltaTime() * attackSpeedStat;
+            }
             public override void FixedUpdate()
             {
                 base.FixedUpdate();
-                charge += GetDeltaTime();
+                IncreaseChargeOnFixedUpdate();
                 if (stopwatch > 0)
                 {
                     stopwatch -= GetDeltaTime();
@@ -3493,7 +3818,7 @@ namespace DemomanRor2
 
         public class PillLauncher : GrenadeLauncher
         {
-            public override float damage => 5f;
+            public override float damage => 4.5f;
 
             public override GameObject projectile => Main.PillProjectile;
 
@@ -3549,6 +3874,9 @@ namespace DemomanRor2
             {
                 outer.SetNextStateToMain();
             }
+            public override void IncreaseChargeOnFixedUpdate()
+            {
+            }
         }
         public class NukeLauncher : GrenadeLauncher
         {
@@ -3568,18 +3896,22 @@ namespace DemomanRor2
         }
         public class BombLauncher : GrenadeLauncher
         {
-            public override float damage => 4f;
+            public override float damage => 6f;
             public override GameObject projectile => Main.BombProjectile;
             public override bool canBeCharged => true;
             public override float fireRate => 0.5f;
             public override bool isPrimary => false;
             public override float chargeCap => 1f;
             public override GrenadeLauncherChargeAffection[] chargeTags => new GrenadeLauncherChargeAffection[] { };
+            public override void IncreaseChargeOnFixedUpdate()
+            {
+                charge += GetDeltaTime();
+            }
 
         }
         public class StickyLauncher : GrenadeLauncher
         {
-            public override float damage => 6f;
+            public override float damage => 4f;
             public override float fireRate => 0.5f;
 
             public override GameObject projectile => Main.StickyProjectile;
@@ -3609,7 +3941,7 @@ namespace DemomanRor2
         }
         public class AntigravLauncher : GrenadeLauncher
         {
-            public override float damage => 7f;
+            public override float damage => 5f;
             public override float fireRate => 0.6f;
 
             public override GameObject projectile => Main.AntigravProjectile;
@@ -3623,7 +3955,7 @@ namespace DemomanRor2
         }
         public class MineLayer : GrenadeLauncher
         {
-            public override float damage => 9f;
+            public override float damage => 3f;
             public override float fireRate => 0.3f;
 
             public override GameObject projectile => Main.MineProjectile;
@@ -3649,6 +3981,12 @@ namespace DemomanRor2
         public override float chargeSpeed => 2.5f;
 
         public override float armor => 100f;
+
+        public override BuffDef buffOnCharge => ExtraSwordDamage;
+
+        public override int stageOneBuffs => 35;
+
+        public override int stageTwoBuffs => 300;
     }
     public class ShieldChargeLight : ShieldCharge
     {
@@ -3663,12 +4001,11 @@ namespace DemomanRor2
         public override float chargeSpeed => 2.5f;
 
         public override float armor => 20f;
-        public override void OnStageTwo()
-        {
-        }
-        public override void OnStageTwoAuthority()
-        {
-        }
+        public override BuffDef buffOnCharge => ExtraSwordDamage;
+
+        public override int stageOneBuffs => 35;
+
+        public override int stageTwoBuffs => 35;
     }
     public class ShieldChargeAntigravity : ShieldCharge
     {
@@ -3683,6 +4020,11 @@ namespace DemomanRor2
         public override float chargeSpeed => 2f;
 
         public override float armor => 0f;
+        public override BuffDef buffOnCharge => ExtraSwordDamage;
+
+        public override int stageOneBuffs => 0;
+
+        public override int stageTwoBuffs => 0;
 
         public override Vector3 CalculateVector()
         {
@@ -3943,7 +4285,7 @@ namespace DemomanRor2
                 {
                     radius = 1f,
                     aimVector = Vector3.up,
-                    damage = Sword.damageStat * (bulletAttack != null ? bulletAttack.damage : 3f),
+                    damage = Sword.damageStat * (bulletAttack != null ? bulletAttack.damage : 3f) / 2,
                     bulletCount = 1,
                     spreadPitchScale = 0f,
                     spreadYawScale = 0f,
@@ -3973,7 +4315,7 @@ namespace DemomanRor2
     {
         //public OverlapAttack overlapAttack;
         private float stopwatch = 0f;
-        private float timer = 5f;
+        private float timer = 4f;
         private float hitStopwatch = 0f;
         private float hitTimer = 1f;
         private bool fired = false;
@@ -4025,17 +4367,17 @@ namespace DemomanRor2
             base.FixedUpdate();
             if (inputBank && characterMotor)
             {
-                Vector3 otherVector = new Vector3(0f, inputBank.aimDirection.y, 0f);
-                if (inputBank.jump.down) otherVector.y += 1;
-                if (otherVector.y > 1) otherVector.y = 1f;
-                currentVector = Vector3.MoveTowards(currentVector, inputBank.moveVector + new Vector3(0f, otherVector.y, 0f), 1 * GetDeltaTime());
-                
-                characterMotor.rootMotion += currentVector * characterMotor.walkSpeed * 3 * GetDeltaTime();
+                //Vector3 otherVector = new Vector3(0f, inputBank.aimDirection.y, 0f);
+                //if (inputBank.jump.down) otherVector.y += 1;
+                //if (otherVector.y > 1) otherVector.y = 1f;
+                currentVector = Vector3.MoveTowards(currentVector, inputBank.moveVector, 1 * GetDeltaTime());
+                characterMotor.velocity += Physics.gravity / 2 * GetDeltaTime();
+                characterMotor.rootMotion += ((currentVector * characterMotor.walkSpeed * 2) * GetDeltaTime());
             }
             rotationVector = Quaternion.AngleAxis(1800 * Time.fixedDeltaTime * attackSpeedStat, Vector3.up) * rotationVector;
             characterDirection.forward = rotationVector;
             hitStopwatch += Time.fixedDeltaTime;
-            if (hitStopwatch >= hitTimer / 4 / attackSpeedStat)
+            if (hitStopwatch >= hitTimer / 5 / attackSpeedStat)
             {
                 specialSwordSpiner.charactersBlacklist.Clear();
                 hitStopwatch = 0f;
@@ -4156,7 +4498,7 @@ namespace DemomanRor2
             }
             DemoStickyClass demoSticky = bombProjectiles.ContainsKey(skillLocator.primary.skillDef) ? bombProjectiles[skillLocator.primary.skillDef] : null;
             projectile = demoSticky != null ? demoSticky.stickyObject : LegacyResourcesAPI.Load<GameObject>("Prefabs/Projectiles/FireMeatBall");
-            damage = demoSticky != null ? demoSticky.damage : 4;
+            damage = demoSticky != null ? demoSticky.stickyState.damage : 4;
             StickyComponent stickyComponent = demoSticky != null ? demoSticky.stickyObject.GetComponent<StickyComponent>() : null;
             fireTimes = stickyComponent != null ? stickyComponent.maxStickies : 8;
 
@@ -4218,9 +4560,7 @@ namespace DemomanRor2
                         crit = RollCrit(),
                         force = 200f,
                         damageColorIndex = DamageColorIndex.Default,
-                        damageTypeOverride = new DamageTypeCombo?(new DamageTypeCombo(DamageType.Generic, DamageTypeExtended.Generic, DamageSource.Special)),
-                        speedOverride = speedOverride2,
-                        useSpeedOverride = true
+                        damageTypeOverride = new DamageTypeCombo?(new DamageTypeCombo(DamageType.Generic, DamageTypeExtended.Generic, DamageSource.Special))
                     };
                     ModifyProjectileFireInfo(ref fireProjectileInfo);
                     ProjectileManager.instance.FireProjectile(fireProjectileInfo);
@@ -4527,7 +4867,7 @@ namespace DemomanRor2
             base.OnEnter();
             DemoStickyClass demoSticky = bombProjectiles.ContainsKey(skillLocator.primary.skillDef) ? bombProjectiles[skillLocator.primary.skillDef] : null;
             projectile = demoSticky != null ? demoSticky.stickyObject : LegacyResourcesAPI.Load<GameObject>("Prefabs/Projectiles/FireMeatBall");
-            damage = demoSticky != null ? demoSticky.damage : 4;
+            damage = demoSticky != null ? demoSticky.stickyState.damage : 4;
             demoComponent = GetComponent<DemoComponent>();
             if (demoComponent)
             {
