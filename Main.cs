@@ -38,6 +38,7 @@ using HG;
 using Unity.Audio;
 using UnityEngine.Rendering;
 using Random = UnityEngine.Random;
+using UnityEngine.Events;
 [assembly: SecurityPermission(SecurityAction.RequestMinimum, SkipVerification = true)]
 [assembly: HG.Reflection.SearchableAttribute.OptIn]
 [assembly: HG.Reflection.SearchableAttribute.OptInAttribute]
@@ -57,7 +58,7 @@ namespace Demolisher
         public const string ModGuid = "com.brynzananas.demolisher";
         public const string ModName = "Demolisher";
         public const string ModVer = "1.0.2";
-        
+
         private static bool emotesEnabled;
         public static PluginInfo PInfo { get; private set; }
         public static AssetBundle ThunderkitAssets;
@@ -65,7 +66,9 @@ namespace Demolisher
         public static Dictionary<string, UnityEngine.Object> assetsDictionary = new Dictionary<string, UnityEngine.Object>();
         public static Dictionary<string, string> tokenReplace = new Dictionary<string, string>();
         public static List<BuffDef> buffsToTrack = new List<BuffDef>();
-
+        public static List<GenericSkill> skillsSkins = new List<GenericSkill>();
+        public static SurvivorDef DemoSurvivorDef;
+        public static SkinDef DemoDefaultSkin;
         public void Awake()
         {
             PInfo = Info;
@@ -90,10 +93,10 @@ namespace Demolisher
                     if (shaderName == "RoR2/Base/Shaders/HGCloudRemap.shader")
                     {
                     }
-                    
+
                 }
             }
-            
+
             foreach (SkillFamily skillFamily in ThunderkitAssets.LoadAllAssets<SkillFamily>())
             {
                 string name = (skillFamily as UnityEngine.Object).name;
@@ -123,9 +126,147 @@ namespace Demolisher
             On.RoR2.Run.OnEnable += Run_OnEnable;
             On.RoR2.Run.OnDisable += Run_OnDisable;
             On.RoR2.CharacterAI.BaseAI.UpdateBodyInputs += BaseAI_UpdateBodyInputs;
-            ContentManager.collectContentPackProviders += (addContentPackProvider) => {
+            On.RoR2.SurvivorMannequins.SurvivorMannequinSlotController.ApplyLoadoutToMannequinInstance += SurvivorMannequinSlotController_ApplyLoadoutToMannequinInstance;
+            On.RoR2.ModelSkinController.ApplySkin += ModelSkinController_ApplySkin;
+            ContentManager.collectContentPackProviders += (addContentPackProvider) =>
+            {
                 addContentPackProvider(new ContentPacks());
             };
+
+        }
+        private void ModelSkinController_ApplySkin(On.RoR2.ModelSkinController.orig_ApplySkin orig, ModelSkinController self, int skinIndex)
+        {
+            orig(self, skinIndex);
+            DemoComponent demoComponent = self.characterModel?.body?.GetComponent<DemoComponent>();
+            if (demoComponent)
+            {
+                SkillLocator skillLocator = demoComponent.gameObject.GetComponent<SkillLocator>();
+                ChildLocator childLocator = demoComponent.childLocator;
+                if (skillLocator && self.characterModel)
+                {
+                    List<GameObject> list = new List<GameObject>();
+                    foreach (var skill in skillLocator.allSkills)
+                    {
+                        if (swordDictionary.ContainsKey(skill.baseSkill))
+                        {
+                            GameObject swordModel = swordDictionary[skill.baseSkill].swordSkin.skillsToSkins[SkinCatalog.GetBodySkinDef(demoComponent.characterBody.bodyIndex, skinIndex)];
+                            Transform weaponTransform = childLocator.FindChild("WeaponR");
+                            if (swordModel && weaponTransform)
+                            {
+                                demoComponent.swordObject = Instantiate(swordModel, weaponTransform);
+                                demoComponent.swordObject.transform.localEulerAngles = new Vector3(0f, 180f, 0f);
+                                list.Add(demoComponent.swordObject);
+
+                            }
+                        }
+                        if (shieldDictionary.ContainsKey(skill.baseSkill))
+                        {
+                            GameObject shieldModel = shieldDictionary[skill.baseSkill];
+                            Transform shieldTransform = childLocator.FindChild("Shield");
+                            if (shieldModel && shieldTransform)
+                            {
+                                demoComponent.shieldObject = Instantiate(shieldModel, shieldTransform);
+                                list.Add(demoComponent.shieldObject);
+
+                            }
+                        }
+                    }
+                    List<CharacterModel.RendererInfo> rendererInfos = self.characterModel.baseRendererInfos.ToList();
+                    foreach (GameObject weaponModel in list)
+                    {
+                        Renderer[] newRenderers = weaponModel.GetComponentsInChildren<Renderer>();
+                        foreach (Renderer renderer in newRenderers)
+                        {
+
+                            rendererInfos.Add(new CharacterModel.RendererInfo
+                            {
+                                defaultMaterial = renderer.material,
+                                defaultShadowCastingMode = renderer.shadowCastingMode,
+                                hideOnDeath = false,
+                                ignoreOverlays = false,
+                                renderer = renderer
+                            });
+
+
+                        }
+                    }
+                    self.characterModel.baseRendererInfos = rendererInfos.ToArray();
+                }
+            }
+        }
+
+        private void SurvivorMannequinSlotController_ApplyLoadoutToMannequinInstance(On.RoR2.SurvivorMannequins.SurvivorMannequinSlotController.orig_ApplyLoadoutToMannequinInstance orig, RoR2.SurvivorMannequins.SurvivorMannequinSlotController self)
+        {
+            orig(self);
+            if (self.currentSurvivorDef == DemoSurvivorDef)
+            {
+                BodyIndex bodyIndexFromSurvivorIndex = SurvivorCatalog.GetBodyIndexFromSurvivorIndex(self.currentSurvivorDef.survivorIndex);
+                ChildLocator childLocator = self.mannequinInstanceTransform.GetComponentInChildren<ChildLocator>();
+                CharacterModel characterModel = self.mannequinInstanceTransform.GetComponentInChildren<CharacterModel>();
+                Loadout loadout = self.currentLoadout;
+                Loadout.BodyLoadoutManager.BodyLoadout bodyLoadout = loadout.bodyLoadoutManager.GetReadOnlyBodyLoadout(bodyIndexFromSurvivorIndex);
+                SkillFamily swordSkillFamily = bodyLoadout.GetSkillFamily(1);
+                SkillFamily shieldSkillFamily = bodyLoadout.GetSkillFamily(4);
+                SkillDef swordSkill = swordSkillFamily.variants[(int)bodyLoadout.GetSkillVariant(1)].skillDef;
+                SkillDef shieldSkill = shieldSkillFamily.variants[(int)bodyLoadout.GetSkillVariant(4)].skillDef;
+                if (characterModel)
+                {
+                    List<GameObject> list = new List<GameObject>();
+                    GameObject swordObject;
+                    GameObject shieldObject;
+                    if (swordDictionary.ContainsKey(swordSkill))
+                    {
+                        GameObject swordModel = swordDictionary[swordSkill].swordSkin.skillsToSkins[SkinCatalog.GetBodySkinDef(bodyIndexFromSurvivorIndex, (int)loadout.bodyLoadoutManager.GetSkinIndex(bodyIndexFromSurvivorIndex))];
+                        Transform weaponTransform = childLocator.FindChild("WeaponR");
+                        if (swordModel && weaponTransform)
+                        {
+                            foreach (Transform child in weaponTransform)
+                            {
+                                Destroy(child.gameObject);
+                            }
+                            swordObject = Instantiate(swordModel, weaponTransform);
+                            swordObject.transform.localEulerAngles = new Vector3(0f, 180f, 0f);
+                            list.Add(swordObject);
+
+                        }
+                    }
+                    if (shieldDictionary.ContainsKey(shieldSkill))
+                    {
+                        GameObject shieldModel = shieldDictionary[shieldSkill];
+                        Transform shieldTransform = childLocator.FindChild("Shield");
+                        if (shieldModel && shieldTransform)
+                        {
+                            foreach (Transform child in shieldTransform)
+                            {
+                                Destroy(child.gameObject);
+                            }
+                            shieldObject = Instantiate(shieldModel, shieldTransform);
+                            list.Add(shieldObject);
+
+                        }
+                    }
+                    List<CharacterModel.RendererInfo> rendererInfos = characterModel.baseRendererInfos.ToList();
+                    foreach (GameObject weaponModel in list)
+                    {
+                        Renderer[] newRenderers = weaponModel.GetComponentsInChildren<Renderer>();
+                        foreach (Renderer renderer in newRenderers)
+                        {
+
+                            rendererInfos.Add(new CharacterModel.RendererInfo
+                            {
+                                defaultMaterial = renderer.material,
+                                defaultShadowCastingMode = renderer.shadowCastingMode,
+                                hideOnDeath = false,
+                                ignoreOverlays = false,
+                                renderer = renderer
+                            });
+
+
+                        }
+                    }
+                    characterModel.baseRendererInfos = rendererInfos.ToArray();
+                }
+            }
 
         }
 
@@ -156,7 +297,7 @@ namespace Demolisher
                             vector.y = 24f;
                         }
                     }
-                    
+
                 }
                 characterBody.RemoveBuff(AfterSlam);
             }
@@ -273,7 +414,7 @@ namespace Demolisher
                 EffectManager.SpawnEffect(explosionVFX, effectData, true);*/
                 self.body.SetBuffCount(VelocityPreserve.buffIndex, 0);
             }
-            
+
         }
 
         private bool GlobalEventManager_IsImmuneToFallDamage(On.RoR2.GlobalEventManager.orig_IsImmuneToFallDamage orig, GlobalEventManager self, CharacterBody body)
@@ -363,6 +504,7 @@ namespace Demolisher
                     } while (self.transform.Find("SMAAASH"));
                 }
                 if (self.characterMotor) self.characterMotor.disableAirControlUntilCollision = false;
+                self.SetBuffCount(DisableAI.buffIndex, 0);
             }
             if (buffDef == VelocityPreserve)
             {
@@ -439,7 +581,7 @@ namespace Demolisher
             {
                 self.body.SetBuffCount(AfterSlam.buffIndex, 0);
             }
-            
+
         }
         private void CharacterMotor_FixedUpdate(On.RoR2.CharacterMotor.orig_FixedUpdate orig, CharacterMotor self)
         {
@@ -461,16 +603,16 @@ namespace Demolisher
                     //wishDirection = wishDirection * self.walkSpeed;
                     if (dotProduct < 0.10)
                         self.velocity += new Vector3(wishDirection.x * self.walkSpeed * 10, 0, wishDirection.z * self.walkSpeed * 10) * Time.fixedDeltaTime;
-                        //self.velocity += inputBankTest.moveVector * self.walkSpeed * Time.fixedDeltaTime;
+                    //self.velocity += inputBankTest.moveVector * self.walkSpeed * Time.fixedDeltaTime;
                 }
-                
+
             }
         }
 
         private void HealthComponent_TakeDamageProcess(On.RoR2.HealthComponent.orig_TakeDamageProcess orig, HealthComponent self, DamageInfo damageInfo)
         {
             CharacterBody characterBody = damageInfo.attacker ? damageInfo.attacker.GetComponent<CharacterBody>() : null;
-            if (characterBody && characterBody.HasBuff(ExtraSwordDamage) && damageInfo.damageType.damageSource == DamageSource.Primary) damageInfo.damage *= 1 +( characterBody.GetBuffCount(ExtraSwordDamage) / 100);
+            if (characterBody && characterBody.HasBuff(ExtraSwordDamage) && damageInfo.damageType.damageSource == DamageSource.Primary) damageInfo.damage *= 1 + (characterBody.GetBuffCount(ExtraSwordDamage) / 100);
             orig(self, damageInfo);
         }
 
@@ -496,7 +638,7 @@ namespace Demolisher
                     {
                         pickupIndex = PickupCatalog.itemIndexToPickupIndex[((int)RoR2Content.Items.ShinyPearl.itemIndex)];
                     }
-                    
+
                 }
                 else
                 {
@@ -533,7 +675,7 @@ namespace Demolisher
         public static GameObject NukeProjectile;
         public static GameObject JumperProjectile;
         public static GameObject HookProjectile;
-        public static SurvivorDef DemoSurvivorDef;
+       
         public static GameObject DemoBody;
         public static GameObject SmokeEffect;
         public static GameObject SwingEffect;
@@ -545,6 +687,7 @@ namespace Demolisher
         public static GameObject Tracer;
         public static GameObject SlamEffect;
         public static GameObject SlamableEffect;
+        public static GameObject HitEffect;
         public static Sprite StickyIndicator;
         public static Sprite SwordIndicator;
         public static Sprite ShieldIndicator;
@@ -560,7 +703,7 @@ namespace Demolisher
             buff.iconSprite = sprite;
             buff.isHidden = isHidden;
             buff.isCooldown = isCooldown;
-            buffs.Add(buff); 
+            buffs.Add(buff);
             return buff;
         }
         public static ItemDef AddItem(string name, ItemTier tier, Sprite sprite, GameObject prefab, bool canRemove, bool hidden, ItemTag[] tags, ItemDisplayRuleDict itemDisplayRuleDict)
@@ -591,6 +734,7 @@ namespace Demolisher
             VelocityPreserve = AddBuff("PreserveVelocity", false, false, false, true, true);
             UpgradeOnKill = AddBuff("UpgradeOnKill", false, false, false, true, false);
             AfterSlam = AddBuff("SlamClutch", false, false, false, true, false);
+            DisableAI = AddBuff("DisableAI", false, false, false, true, false);
             buffsToTrack.Add(AfterSlam);
             SmokeEffect = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/SmokingEffect.prefab");
             SmokeEffect.AddComponent<DontRotate>();
@@ -609,6 +753,7 @@ namespace Demolisher
             SlamableEffect = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/SlammableVFX.prefab");
             SlamableEffect.AddComponent<DontRotate>();
             SlamEffect = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/SlamVFX.prefab");
+            HitEffect = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/HitVFX.prefab");
             //UpgradeItem = AddItem("DemoStompItem", ItemTier.NoTier, null, null, false, true, new ItemTag[] {ItemTag.WorldUnique}, null);
             List<GameObject> projectiles = new List<GameObject>();
             Main.PillProjectile = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/Projectiles/Pill/PillProjectile.prefab");
@@ -647,7 +792,7 @@ namespace Demolisher
             GameObject explosionVFX = Addressables.LoadAssetAsync<GameObject>("RoR2/Base/Toolbot/OmniExplosionVFXToolbotQuick.prefab").WaitForCompletion();
             foreach (GameObject projectile in projectiles)
             {
-                
+
                 ProjectileImpactExplosion projectileImpactExplosion = projectile.GetComponent<ProjectileImpactExplosion>();
                 if (projectileImpactExplosion && projectileImpactExplosion.impactEffect == null)
                 {
@@ -675,6 +820,7 @@ namespace Demolisher
         private static void CreateSurvivor()
         {
             DemoBody = Main.ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/DemolisherBody.prefab");
+            DemoDefaultSkin = Main.ThunderkitAssets.LoadAsset<SkinDef>("Assets/Demoman/DemoDefaultSkin.asset");
             LanguageAPI.Add("DEMOLISHER_BODY_NAME", "Demolisher");
             LanguageAPI.Add("DEMO_SKIN_DEFAULT", "Default");
             LanguageAPI.Add("DEMOLISHER_BODY_SUBTITLE", "Reborn Demon");
@@ -698,6 +844,7 @@ namespace Demolisher
             var component = DemoBody.AddComponent<DemoComponent>();
             var skillLocator = DemoBody.GetComponent<SkillLocator>();
             GameObject hudObject = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/DemoExtraCrosshairRework.prefab");
+            DemoBody.GetComponent<CharacterDeathBehavior>().deathState = new SerializableEntityStateType((typeof(DemoDeathState)));
             hudObject.transform.localScale = new Vector3(-1.4f, 1.4f, 1.4f);
             component.chargeMeter = hudObject;
             component.altCrosshair = Addressables.LoadAssetAsync<GameObject>("RoR2/Base/UI/StandardCrosshair.prefab").WaitForCompletion();
@@ -705,14 +852,15 @@ namespace Demolisher
             EntityStateMachine entityStateMachine = DemoBody.GetComponent<EntityStateMachine>();
             entityStateMachine.mainStateType = new SerializableEntityStateType(typeof(DemoCharacterMain));
             bodies.Add(DemoBody);
-            survivors.Add(Main.ThunderkitAssets.LoadAsset<SurvivorDef>("Assets/Demoman/DemoSurvivor.asset"));
+            DemoSurvivorDef = Main.ThunderkitAssets.LoadAsset<SurvivorDef>("Assets/Demoman/DemoSurvivor.asset");
+            survivors.Add(DemoSurvivorDef);
             if (emotesEnabled)
             {
                 EmoteCompatAbility.EmoteCompatability();
             }
 
         }
-        
+
         public static DemoSoundClass DemoChargeHitFleshSound = new DemoSoundClass("DemoChargeFleshHit");
         public static DemoSoundClass DemoChargeWindUpSound = new DemoSoundClass("DemoChargeWindUp");
         public static DemoSoundClass DemoChargeWorldHitSound = new DemoSoundClass("DemoChargeWorldHit");
@@ -794,10 +942,11 @@ namespace Demolisher
         public static void SimpleTracer(Vector3 statPosition, Vector3 endPosition, float width = 1f, float fadeTime = 0.3f)
         {
             GameObject newTracer = Instantiate(Tracer);
+            float newWidth = width * 10;
             LineRenderer lineRenderer = newTracer.transform.GetChild(0).GetComponent<LineRenderer>();
             lineRenderer.SetPosition(0, statPosition);
             lineRenderer.SetPosition(1, endPosition);
-            lineRenderer.SetWidth(width, width);
+            lineRenderer.SetWidth(newWidth, newWidth);
             DemoTracer demoTracer = newTracer.AddComponent<DemoTracer>();
             demoTracer.time = fadeTime;
             demoTracer.lineRenderer = lineRenderer;
@@ -942,6 +1091,15 @@ namespace Demolisher
                 }
             }
         }
+        public static BulletAttack.HitCallback effectHitCallback = new Main().EffectOnHit;
+        public bool EffectOnHit(BulletAttack bulletAttack, ref BulletAttack.BulletHit hitInfo)
+        {
+            if (hitInfo.hitHurtBox)
+            {
+                SpawnEffect(HitEffect, hitInfo.point, false, Quaternion.identity, OneVector(0.6f));
+            }
+            return false;
+        }
         public class HitHelper : MonoBehaviour
         {
             private TeamFilter filter;
@@ -955,7 +1113,7 @@ namespace Demolisher
             private void OnTriggerEnter(Collider other)
             {
                 HurtBox hurtBox = other.GetComponent<HurtBox>();
-                
+
                 if ((other is MeshCollider ? (other as MeshCollider).convex : true) && stickyComponent ? !stickyComponent.sticked : true && filter && hurtBox && filter.teamIndex != hurtBox.healthComponent.body.teamComponent.teamIndex)
                 {
                     transform.position = other.ClosestPoint(transform.position);
@@ -963,8 +1121,8 @@ namespace Demolisher
             }
 
         }
-       
-    
+
+
         public class DemoExplosionComponent : MonoBehaviour
         {
             private ProjectileExplosion explosion;
@@ -997,11 +1155,11 @@ namespace Demolisher
                 //}
                 //explosionCentre.transform.SetParent(transform, false);
                 explosion.OnProjectileExplosion = new Action<BlastAttack, BlastAttack.Result>(OnProjectileExplosion);
-                
+
             }
             public void OnProjectileExplosion(BlastAttack blastAttack, BlastAttack.Result result)
             {
-                
+
             }
             public void OnDisable()
             {
@@ -1010,7 +1168,7 @@ namespace Demolisher
                 teamIndex = teamFilter ? teamFilter.teamIndex : TeamIndex.None;
                 ProjectileController projectileController = GetComponent<ProjectileController>();
                 owner = projectileController ? projectileController.owner : null;
-                
+
                 //explosionCentre.transform.SetParent(null, true);
             }
             public void OnDestroy()
@@ -1045,7 +1203,7 @@ namespace Demolisher
                     }
 
                 }
-                
+
                 /*
                 foreach (CharacterBody body in bodyList)
                 {
@@ -1220,7 +1378,7 @@ namespace Demolisher
                         return;
                     }
                 }
-                
+
             }
             public void FixedUpdate()
             {
@@ -1333,7 +1491,7 @@ namespace Demolisher
                 //transform.rotation = Quaternion.LookRotation(inputBankTest.aimDirection);
                 if (characterMotor && characterMotor.body)
                 {
-                    speed = Math.Max(characterMotor.walkSpeed,  characterMotor.velocity.magnitude * 3f);
+                    speed = Math.Max(characterMotor.walkSpeed, characterMotor.velocity.magnitude * 3f);
                     if (speed > characterMotor.walkSpeed * 6f) speed = characterMotor.walkSpeed * 6f;
                     if (inputBankTest)
                     {
@@ -1345,13 +1503,13 @@ namespace Demolisher
                         gameObject.layer = 9;
                         gameObject.transform.SetParent(hookedObject.transform, false);
                         hookedObject.transform.SetParent(hookedRotator.transform, false);
-                        float distance = MathF.Max(6,  (collision.contacts[0].point - characterMotor.body.aimOriginTransform.position).magnitude);
+                        float distance = MathF.Max(6, (collision.contacts[0].point - characterMotor.body.aimOriginTransform.position).magnitude);
                         if (distance > 64) distance = 64;
                         hookedObject.transform.position = hookedObject.transform.position + (inputBankTest.aimDirection * distance);
                     }
-                    
+
                 }
-                
+
 
             }
         }
@@ -1404,9 +1562,9 @@ namespace Demolisher
             public bool updateMeter = true;
             public GameObject hudObject;
             public GameObject altCrosshair;
-            private ChildLocator childLocator;
-            private CharacterModel characterModel;
-            private CharacterBody characterBody;
+            public ChildLocator childLocator;
+            public CharacterModel characterModel;
+            public CharacterBody characterBody;
             private CrosshairUtils.OverrideRequest overrideRequest;
             public Transform primarystockCounter;
             public Image primaryStopwatch;
@@ -1417,7 +1575,6 @@ namespace Demolisher
             public Image leftMeterBase;
             public Image rightMeterBase;
             //public Image baseMeter;
-            //public Image grenadeCharge;
             public TextMeshProUGUI stickyText;
             public TextMeshProUGUI extraPrimaryText;
             public TextMeshProUGUI extraSecondaryText;
@@ -1433,6 +1590,7 @@ namespace Demolisher
             public EntityStateMachine bodyStateMachine;
             public GameObject swordObject;
             public GameObject shieldObject;
+            public CrosshairController.SpritePosition[] spritePositions;
             public int stickyCount
             {
                 get
@@ -1475,7 +1633,7 @@ namespace Demolisher
                 childLocator = gameObject.GetComponent<ModelLocator>().modelTransform.GetComponent<ChildLocator>();
                 characterBody = GetComponent<CharacterBody>();
                 characterModel = characterBody.modelLocator.modelTransform.GetComponent<CharacterModel>();
-                
+
                 if (stickies.ContainsKey("All"))
                 {
 
@@ -1488,7 +1646,7 @@ namespace Demolisher
                 EntityStateMachine[] entityStateMachines = GetComponents<EntityStateMachine>();
                 if (entityStateMachines != null)
                 {
-                    foreach(EntityStateMachine entityStateMachine in entityStateMachines)
+                    foreach (EntityStateMachine entityStateMachine in entityStateMachines)
                     {
                         if (entityStateMachine != null && entityStateMachine.customName == "Body")
                         {
@@ -1499,7 +1657,11 @@ namespace Demolisher
             }
             public void OnEnable()
             {
+
                 GetComponent<ModelLocator>().modelTransform.GetComponent<DynamicBone>().m_Weight = 0.07f;
+                //CrosshairController controller = chargeMeter.GetComponent<CrosshairController>();
+                //controller.hudElement.targetBodyObject = gameObject;
+                //controller.hudElement.targetCharacterBody = characterBody;
                 OverlayCreationParams overlayCreationParams = new OverlayCreationParams
                 {
                     prefab = chargeMeter,
@@ -1519,9 +1681,12 @@ namespace Demolisher
             {
                 if (stickies.ContainsKey("All"))
                 {
-                    for (int i = 0; i < stickies["All"].Count; i++)
+                    while (stickies["All"].Count > 0)
                     {
-                        stickies["All"][i].DetonateSticky(0);
+                        for (int i = 0; i < stickies["All"].Count; i++)
+                        {
+                            stickies["All"][i].DetonateSticky(0);
+                        }
                     }
                 }
             }
@@ -1535,6 +1700,7 @@ namespace Demolisher
             }
             public void SetSkillsModels()
             {
+                /*
                 if (skillLocator && characterModel)
                 {
                     List<GameObject> list = new List<GameObject>();
@@ -1542,7 +1708,7 @@ namespace Demolisher
                     {
                         if (swordDictionary.ContainsKey(skill.baseSkill))
                         {
-                            GameObject swordModel = swordDictionary[skill.baseSkill].swordObject;
+                            GameObject swordModel = swordDictionary[skill.baseSkill].swordSkin.skillsToSkins[SkinCatalog.GetBodySkinDef(bodyIndexFromSurvivorIndex, (int)loadout.bodyLoadoutManager.GetSkinIndex(bodyIndexFromSurvivorIndex))];
                             Transform weaponTransform = childLocator.FindChild("WeaponR");
                             if (swordModel && weaponTransform)
                             {
@@ -1568,9 +1734,9 @@ namespace Demolisher
                     foreach (GameObject weaponModel in list)
                     {
                         Renderer[] newRenderers = weaponModel.GetComponentsInChildren<Renderer>();
-                        foreach(Renderer renderer in newRenderers)
+                        foreach (Renderer renderer in newRenderers)
                         {
-                            
+
                             rendererInfos.Add(new CharacterModel.RendererInfo
                             {
                                 defaultMaterial = renderer.material,
@@ -1584,7 +1750,7 @@ namespace Demolisher
                         }
                     }
                     characterModel.baseRendererInfos = rendererInfos.ToArray();
-                }
+                }*/
 
             }
             public void UpdateHudObject()
@@ -1597,7 +1763,7 @@ namespace Demolisher
                         {
                             overrideRequest = CrosshairUtils.RequestOverrideForBody(characterBody, altCrosshair, CrosshairUtils.OverridePriority.Skill);
                         }
-                        
+
                         //baseMeter.sprite = StickyIndicator;
                         leftMeter.sprite = StickyIndicator;
                         rightMeter.sprite = StickyIndicator;
@@ -1618,64 +1784,64 @@ namespace Demolisher
                     }
                 }
             }
+            public void LateUpdate()
+            {
+                float num = 0f;
+                if (characterBody)
+                {
+                    num = characterBody.spreadBloomAngle;
+                }
+                if (spritePositions != null)
+                    for (int i = 0; i < spritePositions.Length; i++)
+                    {
+                        CrosshairController.SpritePosition spritePosition = spritePositions[i];
+                        spritePosition.target.localPosition = Vector3.Lerp(spritePosition.zeroPosition, spritePosition.onePosition, num / 1f);
+                    }
+            }
             public void FixedUpdate()
             {
                 if (canUseUtility && canUseUtilityTimer > 0f) canUseUtilityTimer -= Time.fixedDeltaTime;
                 if (canUseSecondary && canUseSecondaryTimer > 0f) canUseSecondaryTimer -= Time.fixedDeltaTime;
-                
+
                 if (!hudObject && overlayController != null && overlayController.instancesList.Count > 0)
                 {
+                    List<CrosshairController.SpritePosition> spritePositions2 = new List<CrosshairController.SpritePosition>();
                     hudObject = overlayController.instancesList[0];
                     ChildLocator childLocator = hudObject.GetComponent<ChildLocator>();
                     //baseMeter = childLocator.FindChild("CenterBase").GetComponent<Image>();
                     leftMeter = childLocator.FindChild("LeftIndicator").GetComponent<Image>();
                     rightMeter = childLocator.FindChild("RightIndicator").GetComponent<Image>();
                     leftMeterBase = leftMeter.transform.parent.GetComponent<Image>();
+                    CrosshairController.SpritePosition spritePosition = new CrosshairController.SpritePosition
+                    {
+                        target = leftMeterBase.GetComponent<RectTransform>(),
+                        onePosition = new Vector3(16, 0, 0),
+                        zeroPosition = Vector3.zero
+                    };
+                    spritePositions2.Add(spritePosition);
                     rightMeterBase = rightMeter.transform.parent.GetComponent<Image>();
+                    spritePosition = new CrosshairController.SpritePosition
+                    {
+                        target = rightMeterBase.GetComponent<RectTransform>(),
+                        onePosition = new Vector3(-16, 0, 0),
+                        zeroPosition = Vector3.zero
+                    };
+                    spritePositions2.Add(spritePosition);
+                    RectTransform grenadeCrosshair = childLocator.FindChild("GrenadeCrosshair").GetComponent<RectTransform>();
+                    spritePosition = new CrosshairController.SpritePosition
+                    {
+                        target = grenadeCrosshair,
+                        onePosition = new Vector3(0, -48 - 16, 0),
+                        zeroPosition = new Vector3(0, -48, 0)
+                    };
+                    spritePositions2.Add(spritePosition);
+                    spritePositions = spritePositions2.ToArray();
                     //baseMeter = childLocator.FindChild("CenterCharge").GetComponent<Image>();
                     extraPrimaryText = childLocator.FindChild("LeftText").GetComponent<TextMeshProUGUI>();
                     extraSecondaryText = childLocator.FindChild("RightText").GetComponent<TextMeshProUGUI>();
                     //grenadeCharge = childLocator.FindChild("GrenadeCrosshair").GetComponent<Image>();
                     primaryStopwatch = childLocator.FindChild("LeftStick").GetComponent<Image>();
                     secondaryStopwatch = childLocator.FindChild("RightStick").GetComponent<Image>();
-                    //Old crosshair
-                    /*
-                    if (!baseMeter)
-                    {
-                        baseMeter = overlayController.instancesList[0].transform.GetChild(0).GetComponent<Image>();
-                    }
-                    if (!meterImage)
-                    {
-                        meterImage = hudObject.transform.Find("chargeMeterBase/chargeMeter").GetComponent<Image>();
-                    }
-                    if (!stickyText)
-                    {
-                        stickyText = hudObject.transform.Find("chargeMeterBase/stickyCount").GetComponent<TextMeshProUGUI>();
-                    }
-                    if (!primarystockCounter)
-                    {
-                        primarystockCounter = hudObject.transform.Find("chargeMeterBase/primaryStocksCount");
-                    }
-                    if (!secondarystockCounter)
-                    {
-                        secondarystockCounter = hudObject.transform.Find("chargeMeterBase/secondaryStocksCount");
-                    }
-                    if (!primaryStopwatch)
-                    {
-                        primaryStopwatch = hudObject.transform.Find("chargeMeterBase/primaryStopwatchBase/primaryStopwatch").GetComponent<Image>();
-                    }
-                    if (!secondaryStopwatch)
-                    {
-                        secondaryStopwatch = hudObject.transform.Find("chargeMeterBase/secondaryStopwatchBase/secondaryStopwatch").GetComponent<Image>();
-                    }
-                    if (!extraPrimaryText)
-                    {
-                        extraPrimaryText = hudObject.transform.Find("chargeMeterBase/extraPrimaryStocksCount").GetComponent<TextMeshProUGUI>();
-                    }
-                    if (!extraSecondaryText)
-                    {
-                        extraSecondaryText = hudObject.transform.Find("chargeMeterBase/extraSecondaryStocksCount").GetComponent<TextMeshProUGUI>();
-                    }*/
                     UpdateHudObject();
                 }
                 if (extraPrimaryText)
@@ -1734,7 +1900,7 @@ namespace Demolisher
                         {
                             primaryStopwatch.fillAmount = 1 - ((trackStickies.finalRechargeInterval - trackStickies.rechargeStopwatch) / trackStickies.finalRechargeInterval);
                         }
-                        
+
                     }
                     if (secondaryStopwatch)
                     {
@@ -1746,11 +1912,11 @@ namespace Demolisher
                         {
                             secondaryStopwatch.fillAmount = 1 - ((skillLocator.secondary.finalRechargeInterval - skillLocator.secondary.rechargeStopwatch) / skillLocator.secondary.finalRechargeInterval);
                         }
-                        
+
                     }
                 }
-                
-                
+
+
                 if (stickyText)
                 {
                     stickyText.text = stickyCount.ToString();
@@ -1765,7 +1931,7 @@ namespace Demolisher
                     {
                         leftMeter.fillAmount = 1 - ((trackUtility.finalRechargeInterval - trackUtility.rechargeStopwatch) / trackUtility.finalRechargeInterval);
                     }
-                    
+
                 }
 
             }
@@ -1822,7 +1988,7 @@ namespace Demolisher
                         if (canUseUtilityTimer <= 0)
                         {
                             if (bodyStateMachine && bodyStateMachine.state.GetType() == bodyStateMachine.mainStateType.stateType)
-                            skillLocator.utility.ExecuteIfReady();
+                                skillLocator.utility.ExecuteIfReady();
                         }
                         canUseUtility = true;
                         useUtility = false;
@@ -1875,7 +2041,7 @@ namespace Demolisher
                         return;
                     }
                 }
-                
+
             }
             public void OnProjectileImpact(ProjectileImpactInfo impactInfo)
             {
@@ -2007,7 +2173,7 @@ namespace Demolisher
                 rigidbody = GetComponent<Rigidbody>();
                 demoComponent = GetComponent<ProjectileController>().owner.GetComponent<DemoComponent>();
                 projectileImpactExplosion = GetComponent<ProjectileImpactExplosion>();
-                
+
                 if (demoComponent)
                 {
                     currentName = demoComponent.noLimitStickies > 0 ? "All" : stickyName;
@@ -2027,7 +2193,7 @@ namespace Demolisher
                 }
                 projectileDamage = GetComponent<ProjectileDamage>();
                 explosionComponent = GetComponent<DemoExplosionComponent>();
-                
+
             }
             public virtual void OnStickyArmed()
             {
@@ -2046,7 +2212,7 @@ namespace Demolisher
                 }
                 if (projectileDamage)
                     projectileDamage.damage *= damageIncrease;
-                GameObject.Instantiate(fullyArmedVFX, transform);
+                SpawnEffect(fullyArmedVFX, Vector3.zero, true, Quaternion.identity, OneVector(0.6f), transform);
             }
             public List<StickyComponent> GetOrCreateListOfStickies(string listName)
             {
@@ -2076,7 +2242,7 @@ namespace Demolisher
             public virtual void FixedUpdate()
             {
                 stopwatch += Time.fixedDeltaTime;
-                
+
                 if (!armed && isArmed)
                 {
                     OnStickyArmed();
@@ -2309,7 +2475,7 @@ namespace Demolisher
                         detected = true;
                     }
                 }
-                
+
             }
         }
         public class EnergyBallComponent : MonoBehaviour
@@ -2411,15 +2577,20 @@ namespace Demolisher
         public static SkillFamily demoDetonateFamily;
         public static SkillFamily demoPassiveFamily;
         public static DemoSwordClass DefaultSword;
+        public static DemoSkillSkinClass DefaultSwordSkin;
         public static SkillDef SkullcutterSkillDef;
+        public static DemoSkillSkinClass SkullcutterSwordSkin;
         public static DemoSwordClass Skullcutter;
         public static SkillDef ZatoichiSkillDef;
+        public static DemoSkillSkinClass ZatoichiSwordSkin;
         public static DemoSwordClass Zatoichi;
         public static SkillDef CaberSkillDef;
+        public static DemoSkillSkinClass CaberSwordSkin;
         public static DemoSwordClass Caber;
         public static SkillDef DeflectorSkillDef;
         public static DemoSwordClass Deflector;
         public static SkillDef EyelanderSkillDef;
+        public static DemoSkillSkinClass EyelanderSwordSkin;
         public static DemoSwordClass Eyelander;
         public static SkillDef PillLauncherSkillDef;
         public static SkillDef RocketLauncherSkillDef;
@@ -2448,7 +2619,9 @@ namespace Demolisher
         public static SkillDef SwapSkillDef;
         public static SkillDef ManthreadsSkillDef;
         public static SkillDef HeavyShieldSkillDef;
+        public static DemoSkillSkinClass HeavyShieldSkin;
         public static SkillDef LightShieldSkillDef;
+        public static DemoSkillSkinClass LightShieldSkin;
         public static SkillDef SpaceShieldSkillDef;
         public static List<SkillDef> stickySkills = new List<SkillDef>();
         public static Dictionary<SkillDef, SkillDef> customDetonationSkills = new Dictionary<SkillDef, SkillDef>();
@@ -2480,10 +2653,15 @@ namespace Demolisher
                 procCoefficient = 1f,
                 stopperMask = LayerIndex.world.mask,
                 force = 3f,
-                hitCallback = default
+                hitCallback = DefaultOnHit,
 
             };
-            DefaultSword = new DemoSwordClass(DefaultBulletAttack);
+            DefaultSwordSkin = new DemoSkillSkinClass(DemoDefaultSkin, null);
+            DefaultSword = new DemoSwordClass(DefaultBulletAttack, DefaultSwordSkin);
+            bool DefaultOnHit(BulletAttack bulletAttack, ref BulletAttack.BulletHit hitInfo)
+            {
+                return BulletAttack.DefaultHitCallbackImplementation(bulletAttack, ref hitInfo);
+            }
             BulletAttack SkullcutterBulletAttack = new BulletAttack()
             {
                 radius = 1.5f,
@@ -2498,7 +2676,8 @@ namespace Demolisher
                 hitCallback = SkullcutterOnHit
 
             };
-            Skullcutter = new DemoSwordClass(SkullcutterBulletAttack, swordObject: ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/Weapons/Swords/skullcutter.prefab"));
+            SkullcutterSwordSkin = new DemoSkillSkinClass(DemoDefaultSkin, ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/Weapons/Swords/skullcutter.prefab"));
+            Skullcutter = new DemoSwordClass(SkullcutterBulletAttack, SkullcutterSwordSkin);
             bool SkullcutterOnHit(BulletAttack bulletAttack, ref BulletAttack.BulletHit hitInfo)
             {
                 if (hitInfo.hitHurtBox)
@@ -2546,7 +2725,8 @@ namespace Demolisher
                 hitCallback = ZatoichiOnHit
 
             };
-            Zatoichi = new DemoSwordClass(ZatoichiBulletAttack, swordObject: ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/Weapons/Swords/zatoichi.prefab"));
+            ZatoichiSwordSkin = new DemoSkillSkinClass(DemoDefaultSkin, ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/Weapons/Swords/zatoichi.prefab"));
+            Zatoichi = new DemoSwordClass(ZatoichiBulletAttack, ZatoichiSwordSkin);
             bool ZatoichiOnHit(BulletAttack bulletAttack, ref BulletAttack.BulletHit hitInfo)
             {
                 if (hitInfo.hitHurtBox)
@@ -2570,7 +2750,7 @@ namespace Demolisher
                 "On kill: Heal for 15% of the maximum health");
             BulletAttack CaberBulletAttack = new BulletAttack()
             {
-                radius = 1.2f,
+                radius = 0.8f,
                 damage = 3,
                 bulletCount = 1,
                 maxDistance = 6,
@@ -2582,7 +2762,8 @@ namespace Demolisher
                 hitCallback = CaberOnHit
 
             };
-            Caber = new DemoSwordClass(CaberBulletAttack, 0.1f, 0.2f, swordObject: ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/Weapons/Swords/caber.prefab"));
+            CaberSwordSkin = new DemoSkillSkinClass(DemoDefaultSkin, ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/Weapons/Swords/caber.prefab"));
+            Caber = new DemoSwordClass(CaberBulletAttack, CaberSwordSkin, 0.1f, 0.2f);
             bool CaberOnHit(BulletAttack bulletAttack, ref BulletAttack.BulletHit hitInfo)
             {
                 CharacterBody ownerBody = bulletAttack.owner.GetComponent<CharacterBody>();
@@ -2662,7 +2843,8 @@ namespace Demolisher
                 hitCallback = EyelanderOnHit,
 
             };
-            Eyelander = new DemoSwordClass(EyelanderBulletAttack, swordObject: ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/Weapons/Swords/eyelander.prefab"));
+            EyelanderSwordSkin = new DemoSkillSkinClass(DemoDefaultSkin, ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/Weapons/Swords/eyelander.prefab"));
+            Eyelander = new DemoSwordClass(EyelanderBulletAttack, EyelanderSwordSkin);
             bool EyelanderOnHit(BulletAttack bulletAttack, ref BulletAttack.BulletHit hitInfo)
             {
                 if (hitInfo.hitHurtBox)
@@ -2817,7 +2999,7 @@ namespace Demolisher
             //SkillLocator skillLocator = commandoBodyPrefab.GetComponent<SkillLocator>();
             //SkillFamily skillFamily = skillLocator.primary.skillFamily;
             if (skillFamily)
-            AddSkillToFamily(ref skillFamily, mySkillDef);
+                AddSkillToFamily(ref skillFamily, mySkillDef);
             //swordDictionary.Add(mySkillDef, demoSword);
             return mySkillDef;
         }
@@ -2888,12 +3070,20 @@ namespace Demolisher
             SkillDef skillDef = AddSkill(typeof(ChangeWeapons), "Extra", sprite, "DemoSwap", "DEMOMAN_SWAP_NAME", "DEMOMAN_SWAP_DESC", default, 1, 0, false, false, false, true, InterruptPriority.Any, false, true, 0, 1, 0, null);
             return skillDef;
         }
-        public class DemoSwordClass(BulletAttack bulletAttack, float swingUpTime = 0.4f, float swingDownTime = 0.4f, GameObject swordObject = null)
+        public class DemoSkillSkinClass
+        {
+            public DemoSkillSkinClass(SkinDef skinDef, GameObject gameObject)
+            {
+                skillsToSkins.Add(skinDef, gameObject);
+            }
+            public Dictionary<SkinDef, GameObject> skillsToSkins = new Dictionary<SkinDef, GameObject> ();
+        }
+        public class DemoSwordClass(BulletAttack bulletAttack, DemoSkillSkinClass swordSkin, float swingUpTime = 0.4f, float swingDownTime = 0.4f)
         {
             public BulletAttack bulletAttack = bulletAttack;
             public float swingUpTime = swingUpTime;
             public float swingDownTime = swingDownTime;
-            public GameObject swordObject = swordObject;
+            public DemoSkillSkinClass swordSkin = swordSkin;
         }
         public class DemoStickyClass(GameObject stickyObject, GrenadeLauncher stickyState)
         {
@@ -2926,54 +3116,6 @@ namespace Demolisher
             states.Add(typeof(ShieldChargeHeavy));
             states.Add(typeof(ShieldChargeLight));
             states.Add(typeof(ChangeWeapons));
-        }
-        private static void InitSwordAttacks()
-        {
-
-
-            swordDictionary.Add(SkullcutterSkillDef, Skullcutter);
-
-            swordDictionary.Add(ZatoichiSkillDef, Zatoichi);
-
-            swordDictionary.Add(CaberSkillDef, Caber);
-            BulletAttack DeflectorBulletAttack = new BulletAttack()
-            {
-                radius = 2f,
-                damage = 2,
-                bulletCount = 1,
-                maxDistance = 8,
-                allowTrajectoryAimAssist = false,
-                hitMask = LayerIndex.entityPrecise.mask + LayerIndex.projectile.mask,
-                procCoefficient = 1f,
-                stopperMask = LayerIndex.world.mask,
-                force = 3f,
-                hitCallback = DeflectorOnHit
-
-            };
-            Deflector = new DemoSwordClass(DeflectorBulletAttack, swordObject: ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/Weapons/Swords/eyelander.prefab"));
-            bool DeflectorOnHit(BulletAttack bulletAttack, ref BulletAttack.BulletHit hitInfo)
-            {
-                ProjectileController projectile = hitInfo.collider.GetComponent<ProjectileController>();
-                CharacterBody characterBody = bulletAttack.owner.GetComponent<CharacterBody>();
-                if (projectile)
-                {
-
-                    projectile.rigidbody.velocity = characterBody.inputBank.aimDirection * (projectile.rigidbody.velocity.magnitude * 3);
-                    projectile.teamFilter.teamIndex = characterBody.teamComponent.teamIndex;
-                }
-                CharacterBody enemyBody = hitInfo.collider.GetComponent<HurtBox>() ? hitInfo.collider.GetComponent<HurtBox>().healthComponent.body : null;
-                if (enemyBody != null)
-                {
-                    foreach (var state in enemyBody.GetComponents<EntityStateMachine>())
-                    {
-                        state.SetNextStateToMain();
-                    }
-                }
-                return BulletAttack.DefaultHitCallbackImplementation(bulletAttack, ref hitInfo);
-            }
-            //swordDictionary.Add(DeflectorSkillDef, Deflector);
-
-            swordDictionary.Add(EyelanderSkillDef, Eyelander);
         }
         public static void GenerateSwordKeywordToken(string token, DemoSwordClass demoSword, string before = "", string after = "")
         {
@@ -3088,11 +3230,10 @@ namespace Demolisher
         //    public abstract float damage { get; }
         //    public abstract DamageType damageType { get; }
         //}
-        public class DemoSword : BaseState, ISkillState
+        public class DemoSword : BaseSkillState
         {
             private float stopwatch = 0f;
             private bool fired = true;
-            public GenericSkill activatorSkillSlot { get; set; }
             public float range;
             public float radius;
             public bool isCrit;
@@ -3173,7 +3314,7 @@ namespace Demolisher
                     isCrit = isCrit,
                     origin = GetAimRay().origin,
                     owner = gameObject,
-                    hitCallback = bulletAttack.hitCallback + ChargeOnHit,
+                    hitCallback = bulletAttack.hitCallback + ChargeOnHit + effectHitCallback,
 
                 };
                 return bulletAttack2;
@@ -3190,7 +3331,6 @@ namespace Demolisher
 
                 }
                 return false;
-                //return BulletAttack.DefaultHitCallbackImplementation(bulletAttack, ref hitInfo);
             }
             public virtual void SwingSword(BulletAttack bulletAttack)
             {
@@ -3213,8 +3353,8 @@ namespace Demolisher
                     size.constantMax = bulletAttack.radius;
                     size.constantMin = bulletAttack.radius;
                 }
-
                 Util.PlaySound(DemoSwordSwingSound.playSoundString, gameObject);
+                characterBody.AddSpreadBloom(0.5f);
                 float animationTime = swordClass.swingDownTime;
                 PlayAnimation("Gesture, Override", "SwingDown1", "Slash.playbackRate", animationTime / characterBody.attackSpeed, 0.2f);
 
@@ -3305,7 +3445,7 @@ namespace Demolisher
                     else
                     {
                         HealthComponent healthComponent = hit.collider.GetComponent<HurtBox>()?.healthComponent;
-                        if (healthComponent && healthComponent.body.teamComponent.teamIndex != characterBody.teamComponent.teamIndex)
+                        if (NetworkServer.active && healthComponent && healthComponent.body.teamComponent.teamIndex != characterBody.teamComponent.teamIndex)
                         {
                             var bonk = new DamageInfo
                             {
@@ -3475,7 +3615,7 @@ namespace Demolisher
             Speed,
             Lifetime
         }
-        public abstract class GrenadeLauncher : BaseState, ISkillState
+        public abstract class GrenadeLauncher : BaseSkillState
         {
             public float stopwatch = 0f;
             public bool fired = false;
@@ -3486,8 +3626,9 @@ namespace Demolisher
             public abstract float chargeCap { get; }
             public abstract bool isPrimary { get; }
             public abstract GameObject projectile { get; }
+            public abstract string fireSound { get; }
             public abstract GrenadeLauncherChargeAffection[] chargeTags { get; }
-            public GenericSkill activatorSkillSlot { get; set; }
+
             public DemoComponent demoComponent;
 
             public float charge = 0f;
@@ -3542,24 +3683,27 @@ namespace Demolisher
                 TrajectoryAimAssist.ApplyTrajectoryAimAssist(ref aimRay, projectile, base.gameObject, 1f);
                 //Util.PlaySound(DemoGrenadeShootSound.playSoundString, gameObject);
                 if (canBeCharged) Util.PlaySound(DemoCannonChargeSound.stopSoundString, gameObject);
-                FireProjectileInfo fireProjectileInfo = new FireProjectileInfo
+
+                if (NetworkServer.active)
                 {
-                    projectilePrefab = projectile,
-                    position = aimRay.origin,
-                    rotation = Util.QuaternionSafeLookRotation(aimRay.direction),
-                    owner = base.gameObject,
-                    damage = damage * this.damageStat * (chargeTags.Contains(GrenadeLauncherChargeAffection.Damage) ? 1 + charge : 1),
-                    force = 1f,
-                    crit = Util.CheckRoll(this.critStat, base.characterBody.master),
-                    speedOverride = chargeTags.Contains(GrenadeLauncherChargeAffection.Speed) ? projectile.GetComponent<ProjectileSimple>().desiredForwardSpeed * (1 + charge) : -1f,
-                    damageTypeOverride = new DamageTypeCombo?(new DamageTypeCombo(DamageType.Generic, DamageTypeExtended.Generic, GetDamageSource()))
-                };
-                ModifiyProjectileFireInfo(ref fireProjectileInfo);
-                if (isAuthority)
-                {
+                    FireProjectileInfo fireProjectileInfo = new FireProjectileInfo
+                    {
+                        projectilePrefab = projectile,
+                        position = aimRay.origin,
+                        rotation = Util.QuaternionSafeLookRotation(aimRay.direction),
+                        owner = base.gameObject,
+                        damage = damage * this.damageStat * (chargeTags.Contains(GrenadeLauncherChargeAffection.Damage) ? 1 + charge : 1),
+                        force = 1f,
+                        crit = Util.CheckRoll(this.critStat, base.characterBody.master),
+                        speedOverride = chargeTags.Contains(GrenadeLauncherChargeAffection.Speed) ? projectile.GetComponent<ProjectileSimple>().desiredForwardSpeed * (1 + charge) : -1f,
+                        damageTypeOverride = new DamageTypeCombo?(new DamageTypeCombo(DamageType.Generic, DamageTypeExtended.Generic, GetDamageSource()))
+                    };
+                    ModifiyProjectileFireInfo(ref fireProjectileInfo);
                     ProjectileManager.instance.FireProjectile(fireProjectileInfo);
-                    Util.PlaySound(fireProjectileInfo.crit ? DemoGrenadeShootCritSound.playSoundString : DemoGrenadeShootSound.playSoundString, gameObject);
+
                 }
+                characterBody.AddSpreadBloom(0.5f);
+                Util.PlaySound(fireSound, gameObject);
                 if (chargeMeter)
                 {
                     chargeMeter.fillAmount = 1f;
@@ -3636,7 +3780,7 @@ namespace Demolisher
                     {
                         chargeMeter.fillAmount = charge / chargeCap;
                     }
-                    if (isAuthority && !stopCharge && (!inputBank || !GetButton().down || charge >= chargeCap))
+                    if (!stopCharge && (!inputBank || !GetButton().down || charge >= chargeCap))
                     {
                         if (charge < chargeCap)
                         {
@@ -3689,6 +3833,8 @@ namespace Demolisher
             public override float chargeCap => 0f;
 
             public override GrenadeLauncherChargeAffection[] chargeTags => new GrenadeLauncherChargeAffection[] { };
+
+            public override string fireSound => DemoGrenadeShootSound.playSoundString;
         }
         public class RocketLauncher : GrenadeLauncher
         {
@@ -3702,6 +3848,7 @@ namespace Demolisher
             public override float fireRate => 0.5f;
             public override bool isPrimary => false;
             public override float chargeCap => 0f;
+            public override string fireSound => DemoGrenadeShootSound.playSoundString;
 
         }
         public class HookLauncher : GrenadeLauncher
@@ -3713,6 +3860,7 @@ namespace Demolisher
             public override float fireRate => 0.5f;
             public override bool isPrimary => false;
             public override float chargeCap => 12f;
+            public override string fireSound => DemoGrenadeShootSound.playSoundString;
             public override void OnEnter()
             {
                 base.OnEnter();
@@ -3750,6 +3898,7 @@ namespace Demolisher
 
             public override float chargeCap => 0f;
             public override GrenadeLauncherChargeAffection[] chargeTags => new GrenadeLauncherChargeAffection[] { };
+            public override string fireSound => DemoGrenadeShootSound.playSoundString;
 
         }
         public class BombLauncher : GrenadeLauncher
@@ -3761,6 +3910,7 @@ namespace Demolisher
             public override bool isPrimary => false;
             public override float chargeCap => 1f;
             public override GrenadeLauncherChargeAffection[] chargeTags => new GrenadeLauncherChargeAffection[] { };
+            public override string fireSound => DemoGrenadeShootSound.playSoundString;
             public override void IncreaseChargeOnFixedUpdate()
             {
                 charge += GetDeltaTime();
@@ -3780,6 +3930,7 @@ namespace Demolisher
 
             public override float chargeCap => 1f;
             public override GrenadeLauncherChargeAffection[] chargeTags => new GrenadeLauncherChargeAffection[] { GrenadeLauncherChargeAffection.Speed };
+            public override string fireSound => DemoGrenadeShootSound.playSoundString;
 
         }
         public class JumperLauncher : GrenadeLauncher
@@ -3795,6 +3946,7 @@ namespace Demolisher
 
             public override float chargeCap => 1f;
             public override GrenadeLauncherChargeAffection[] chargeTags => new GrenadeLauncherChargeAffection[] { GrenadeLauncherChargeAffection.Speed };
+            public override string fireSound => DemoGrenadeShootSound.playSoundString;
 
         }
         public class AntigravLauncher : GrenadeLauncher
@@ -3809,6 +3961,7 @@ namespace Demolisher
 
             public override float chargeCap => 2f;
             public override GrenadeLauncherChargeAffection[] chargeTags => new GrenadeLauncherChargeAffection[] { GrenadeLauncherChargeAffection.Speed };
+            public override string fireSound => DemoGrenadeShootSound.playSoundString;
 
         }
         public class MineLayer : GrenadeLauncher
@@ -3823,6 +3976,7 @@ namespace Demolisher
 
             public override float chargeCap => 0f;
             public override GrenadeLauncherChargeAffection[] chargeTags => new GrenadeLauncherChargeAffection[] { GrenadeLauncherChargeAffection.Speed };
+            public override string fireSound => DemoGrenadeShootSound.playSoundString;
 
         }
 
@@ -4178,7 +4332,7 @@ namespace Demolisher
                         isCrit = Sword.RollCrit(),
                         origin = characterBody.mainHurtBox.transform.position,
                         owner = Sword.gameObject,
-                        hitCallback = bulletAttack != null ? bulletAttack.hitCallback : null,
+                        hitCallback = (bulletAttack != null ? bulletAttack.hitCallback : null) + new Main().EffectOnHit,
 
                     };
                     bulletAttack2.Fire();
@@ -4221,7 +4375,7 @@ namespace Demolisher
         {
             private float stopwatch = 0f;
             public abstract float timer { get; }
-            public abstract float rotationsPerSecond {get; }
+            public abstract float rotationsPerSecond { get; }
             private float hitStopwatch = 0f;
             private float hitTimer = 1f;
             private bool fired = false;
@@ -4265,7 +4419,7 @@ namespace Demolisher
                 if (hitStopwatch >= hitTimer / rotationsPerSecond / characterBody.attackSpeed)
                 {
                     OnFullRotation();
-                    
+
                 }
                 if (stopwatch > timer)
                 {
@@ -4301,7 +4455,7 @@ namespace Demolisher
             public override void OnExit()
             {
                 base.OnExit();
-                Destroy(spinner);
+                GameObject.Destroy(spinner, 0.2f);
             }
             public override void OnFullRotation()
             {
@@ -4343,7 +4497,7 @@ namespace Demolisher
             public override void OnExit()
             {
                 base.OnExit();
-                Destroy(spinner);
+                GameObject.Destroy(spinner, 0.2f);
                 if (demoComponent)
                 {
                     demoComponent.noLimitStickies--;
@@ -4362,7 +4516,7 @@ namespace Demolisher
                     Util.PlaySound(DemoGrenadeShootSound.playSoundString, gameObject);
                     PlayAnimation("Gun, Override", "ShootGun");
                     newStopwatch = 0;
-                    
+
                 }
             }
             public override void OnFullRotation()
@@ -4381,6 +4535,8 @@ namespace Demolisher
             public override void OnEnter()
             {
                 base.OnEnter();
+                if (isAuthority)
+                    Util.PlaySound(DemoChargeWindUpSound.playSoundString, gameObject);
                 demoComponent = GetComponent<DemoComponent>();
                 chargeImage = demoComponent ? demoComponent.rightMeter : null;
             }
@@ -4395,7 +4551,7 @@ namespace Demolisher
                         if (power < chargeCap)
                         {
                             if (isAuthority)
-                            chargeImage.fillAmount = power;
+                                chargeImage.fillAmount = power / chargeCap;
                             power += GetDeltaTime() * characterBody.attackSpeed;
                         }
                         else if (!isCharged)
@@ -4409,13 +4565,17 @@ namespace Demolisher
                         OnRelease();
                     }
                 }
-                
-                
+
+
             }
             public virtual void OnFullCharge()
             {
                 if (isAuthority)
-                    chargeImage.fillAmount = 1f;
+                {
+                    if (chargeImage)
+                        chargeImage.fillAmount = 1f;
+                    Util.PlaySound(DemoChargeWindUpSound.playSoundString, gameObject);
+                }
             }
             public virtual void OnHold()
             {
@@ -4425,7 +4585,12 @@ namespace Demolisher
             {
                 base.OnExit();
                 if (isAuthority)
-                    chargeImage.fillAmount = 1f;
+                {
+                    Util.PlaySound(DemoChargeWindUpSound.playSoundString, gameObject);
+                    if (chargeImage)
+                        chargeImage.fillAmount = 1f;
+                }
+
             }
             public virtual void OnRelease()
             {
@@ -4472,7 +4637,7 @@ namespace Demolisher
                     {
                         radius = swordAttack.maxDistance,
                         aimVector = Vector3.up,
-                        damage = base.damageStat * (swordAttack != null ? swordAttack.damage : 5f) * 2 * (1 + power),
+                        damage = base.damageStat * (swordAttack != null ? swordAttack.damage : 5f) * 1.5f * (1 + (power / chargeCap * 2f)),
                         bulletCount = 1,
                         spreadPitchScale = 0f,
                         spreadYawScale = 0f,
@@ -4517,6 +4682,7 @@ namespace Demolisher
             public float damage;
             public Transform cannonTransform;
             public Vector3 previousScale;
+            public float speedOverride = -1;
             public override void OnEnter()
             {
                 base.OnEnter();
@@ -4524,7 +4690,7 @@ namespace Demolisher
                 projectile = demoSticky != null ? demoSticky.stickyObject : LegacyResourcesAPI.Load<GameObject>("Prefabs/Projectiles/FireMeatBall");
                 damage = demoSticky != null ? demoSticky.stickyState.damage : 4;
                 demoComponent = GetComponent<DemoComponent>();
-                
+                speedOverride = demoSticky != null ? -1 : 60;
                 Transform modelTransform = GetComponent<ModelLocator>()?.modelTransform;
                 ChildLocator childLocator = modelTransform?.GetComponent<ChildLocator>();
                 if (childLocator)
@@ -4560,11 +4726,12 @@ namespace Demolisher
                         rotation = Util.QuaternionSafeLookRotation(inputBank ? inputBank.aimDirection : transform.rotation.eulerAngles),
                         procChainMask = default,
                         owner = gameObject,
-                        damage = base.damageStat * damage * (1 + power),
+                        damage = base.damageStat * damage * 2.5f * (1 + (power / chargeCap * 2f)),
                         crit = RollCrit(),
                         force = 200f,
                         damageColorIndex = DamageColorIndex.Default,
-                        damageTypeOverride = new DamageTypeCombo?(new DamageTypeCombo(DamageType.Generic, DamageTypeExtended.Generic, DamageSource.Special))
+                        damageTypeOverride = new DamageTypeCombo?(new DamageTypeCombo(DamageType.Generic, DamageTypeExtended.Generic, DamageSource.Special)),
+                        speedOverride = speedOverride
                     };
                     ProjectileManager.instance.FireProjectile(fireProjectileInfo);
                 }
@@ -4662,7 +4829,7 @@ namespace Demolisher
                             position = characterBody.aimOrigin;
                             direction = enemyBody.mainHurtBox.transform.position - characterBody.aimOrigin;
                         }
-                        
+
                         Action(enemyBody, enemyBodyPosition, previousBodyPosition);
                         previousBody = enemyBody;
                     }
@@ -4672,20 +4839,8 @@ namespace Demolisher
             }
             public virtual void Action(CharacterBody enemyBody, Vector3 enemyPosition, Vector3 previousPosition)
             {
-                SimpleTracer(previousPosition, enemyPosition, 10f);
-                //GameObject swingEffectcopy = GameObject.Instantiate(effect);
-                //swingEffectcopy.transform.position = position;
-                //swingEffectcopy.transform.rotation = Quaternion.LookRotation(direction);
-                //List<ParticleSystem> particleSystems = new List<ParticleSystem>();
-                //ParticleSystem particleSystem = swingEffectcopy.transform.Find("mainSwing").GetComponent<ParticleSystem>();
-                //particleSystems.Add(particleSystem);
-                ////ParticleSystem particleSystem2 = swingEffectcopy.transform.Find("mainSwing2").GetComponent<ParticleSystem>();
-                ////particleSystems.Add(particleSystem2);
-                //foreach (ParticleSystem particle in particleSystems)
-                //{
-                //    var vel = particleSystem.velocityOverLifetime;
-                //    vel.speedModifier = direction.magnitude;
-                //}
+                SimpleTracer(previousPosition, enemyPosition, 1f);
+                SpawnEffect(HitEffect, enemyPosition, false, Quaternion.identity, OneVector(0.7f));
             }
         }
         public class UltraInstinctReworkSword : UltraInstinctRework
@@ -4729,7 +4884,7 @@ namespace Demolisher
                     };
                     bulletAttack2.Fire();
                 }
-                
+
             }
         }
         public class UltraInstinctReworkSticky : UltraInstinctRework
@@ -4781,7 +4936,7 @@ namespace Demolisher
                     };
                     ProjectileManager.instance.FireProjectile(fireProjectileInfo);
                 }
-                
+
             }
         }
         public abstract class UltraInstinctState : BaseState, ISkillState
@@ -4805,7 +4960,7 @@ namespace Demolisher
             public GenericSkill activatorSkillSlot { get; set; }
             public virtual void OnFound()
             {
-                
+
             }
             public virtual void OnContact()
             {
@@ -5168,7 +5323,7 @@ namespace Demolisher
                             origin = transform.position,
                             direction = Physics.gravity,
                         };
-                        height = Util.CharacterRaycast(gameObject, ray, out raycastHit, 9999f, LayerIndex.world.mask, QueryTriggerInteraction.UseGlobal) ? (raycastHit.point - characterBody.footPosition).magnitude : 0;
+                        height = Util.CharacterRaycast(gameObject, ray, out raycastHit, 9999f, LayerIndex.world.mask, QueryTriggerInteraction.UseGlobal) ? (raycastHit.point - characterBody.footPosition).magnitude + ((Physics.gravity * -1).magnitude) : 0;
                         if (characterMotor)
                         {
                             if (characterMotor.velocity.y < 0) characterMotor.velocity.y = 0;
@@ -5207,7 +5362,7 @@ namespace Demolisher
                 base.Update();
                 if (stopwatch > 0 && characterMotor && inputBank && inputBank.jump.justPressed)
                 {
-                    SpawnEffect(SlamEffect, characterBody.footPosition, false, Quaternion.identity, OneVector(characterBody.radius));
+                    SpawnEffect(SlamEffect, characterBody.footPosition, false, Quaternion.identity, new Vector3(radius, 1f, radius));
                     if (characterMotor.Motor)
                         characterMotor.Motor.ForceUnground(0f);
                     characterMotor.velocity.y = height + 5f;
@@ -5221,7 +5376,7 @@ namespace Demolisher
             public void SlamMethod()
             {
                 slaming = true;
-                SpawnEffect(SlamEffect, characterBody.footPosition, false, Quaternion.identity, OneVector(radius));
+                SpawnEffect(SlamEffect, characterBody.footPosition, false, Quaternion.identity, new Vector3(radius, 1f, radius));
                 if (NetworkServer.active)
                 {
                     Collider[] collidersArray = Physics.OverlapSphere(transform.position, radius, LayerIndex.entityPrecise.mask, QueryTriggerInteraction.UseGlobal);
@@ -5249,9 +5404,10 @@ namespace Demolisher
                         }
 
                         body.AddBuff(AfterSlam);
+                        body.AddBuff(DisableAI);
                     }
                 }
-                
+
                 stopwatch = 0.5f;
             }
         }
@@ -5291,6 +5447,64 @@ namespace Demolisher
                 return InterruptPriority.Skill;
             }
         }
+        public class DemoDeathState : GenericCharacterDeath
+        {
+            public bool gone = false;
+            public CharacterModel characterModel;
+            public override void OnEnter()
+            {
+                base.OnEnter();
+                Vector3 vector = Vector3.up * 3f;
+                if (base.characterMotor)
+                {
+                    vector += base.characterMotor.velocity;
+                    base.characterMotor.enabled = false;
+                }
+                if (base.cachedModelTransform)
+                {
+                    characterModel = cachedModelTransform.GetComponent<CharacterModel>();
+                    RagdollController component = base.cachedModelTransform.GetComponent<RagdollController>();
+                    if (component)
+                    {
+                        component.BeginRagdoll(vector);
+                    }
+                }
+            }
+            public override void PlayDeathAnimation(float crossfadeDuration = 0.1f)
+            {
+            }
+            public override bool shouldAutoDestroy
+            {
+                get
+                {
+                    return false;
+                }
+            }
+            public override void FixedUpdate()
+            {
+                base.FixedUpdate();
+                if (fixedAge > 2f && !gone)
+                {
+                    gone = true;
+                    characterModel.invisibilityCount++;
+                    SpawnEffect(HitEffect, transform.position, false, Quaternion.identity, OneVector(1f));
+                }
+                if (NetworkServer.active && base.fixedAge > 4f)
+                {
+                    EntityState.Destroy(base.gameObject);
+                }
+            }
+            public override InterruptPriority GetMinimumInterruptPriority()
+            {
+                return InterruptPriority.Death;
+            }
+            private Vector3 previousPosition;
+            private float upSpeedVelocity;
+            private float upSpeed;
+            private Animator modelAnimator;
+        }
+
+
     }
     public class ContentPacks : IContentPackProvider
     {
