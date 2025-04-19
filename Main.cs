@@ -32,6 +32,12 @@ using RoR2.ContentManagement;
 using System.Collections;
 using System.Xml.Linq;
 using static UnityEngine.SendMouseEvents;
+using UnityEngine.SocialPlatforms.Impl;
+using EntityStates.Captain.Weapon;
+using HG;
+using Unity.Audio;
+using UnityEngine.Rendering;
+using Random = UnityEngine.Random;
 [assembly: SecurityPermission(SecurityAction.RequestMinimum, SkipVerification = true)]
 [assembly: HG.Reflection.SearchableAttribute.OptIn]
 [assembly: HG.Reflection.SearchableAttribute.OptInAttribute]
@@ -116,36 +122,43 @@ namespace Demolisher
             Run.onRunStartGlobal += Run_onRunStartGlobal;
             On.RoR2.Run.OnEnable += Run_OnEnable;
             On.RoR2.Run.OnDisable += Run_OnDisable;
+            On.RoR2.CharacterAI.BaseAI.UpdateBodyInputs += BaseAI_UpdateBodyInputs;
             ContentManager.collectContentPackProviders += (addContentPackProvider) => {
                 addContentPackProvider(new ContentPacks());
             };
 
         }
 
+        private void BaseAI_UpdateBodyInputs(On.RoR2.CharacterAI.BaseAI.orig_UpdateBodyInputs orig, RoR2.CharacterAI.BaseAI self)
+        {
+            orig(self);
+            if (self.body && self.body.HasBuff(DisableAI)) return;
+        }
+
         private void GlobalEventManager_OnHitEnemy(On.RoR2.GlobalEventManager.orig_OnHitEnemy orig, GlobalEventManager self, DamageInfo damageInfo, GameObject victim)
         {
             orig(self, damageInfo, victim);
-            CharacterBody characterBody = self.GetComponent<CharacterBody>();
-            if (characterBody && characterBody.HasBuff(SlamClutch))
+            CharacterBody characterBody = victim.GetComponent<CharacterBody>();
+            if (characterBody && characterBody.HasBuff(AfterSlam))
             {
-                List<CharacterBody> characterBodies = runDemoInstance.GetBuffBodies(SlamClutch);
+                List<CharacterBody> characterBodies = runDemoInstance.GetBuffBodies(AfterSlam);
                 if (characterBodies != null && characterBodies.Count > 0)
                 {
                     foreach (CharacterBody characterBody1 in characterBodies)
                     {
-                        if (characterBody.characterMotor)
+                        if (characterBody1.characterMotor)
                         {
-                            characterBody.characterMotor.velocity.y = 24f;
+                            characterBody1.characterMotor.velocity.y = 24f;
                         }
                         else if (characterBody1.rigidbody)
                         {
-                            Vector3 vector = characterBody.rigidbody.velocity;
+                            Vector3 vector = characterBody1.rigidbody.velocity;
                             vector.y = 24f;
                         }
                     }
                     
                 }
-                characterBody.RemoveBuff(SlamClutch);
+                characterBody.RemoveBuff(AfterSlam);
             }
         }
 
@@ -319,13 +332,37 @@ namespace Demolisher
                 }
             }
         }
-
+        public static void StopAndDestroyVFX(Transform transform, float timeToDestroy)
+        {
+            StopAndDestroyVFX(transform.gameObject, timeToDestroy);
+        }
+        public static void StopAndDestroyVFX(GameObject gameObject, float timeToDestroy)
+        {
+            gameObject.name = "gone";
+            ParticleSystem[] particleSystems = gameObject.GetComponentsInChildren<ParticleSystem>();
+            foreach (ParticleSystem particleSystem in particleSystems)
+            {
+                particleSystem.enableEmission = false;
+            }
+            Destroy(gameObject, timeToDestroy);
+        }
         private void CharacterBody_OnBuffFinalStackLost(On.RoR2.CharacterBody.orig_OnBuffFinalStackLost orig, CharacterBody self, BuffDef buffDef)
         {
             orig(self, buffDef);
             if (buffsToTrack.Contains(buffDef))
             {
                 runDemoInstance.RemoveBuffBody(buffDef, self);
+            }
+            if (buffDef == AfterSlam)
+            {
+                if (self.transform.Find("SMAAASH"))
+                {
+                    do
+                    {
+                        StopAndDestroyVFX(self.transform.Find("SMAAASH"), 1f);
+                    } while (self.transform.Find("SMAAASH"));
+                }
+                if (self.characterMotor) self.characterMotor.disableAirControlUntilCollision = false;
             }
             if (buffDef == VelocityPreserve)
             {
@@ -341,13 +378,7 @@ namespace Demolisher
                         do
                         {
                             GameObject smoking = footR.Find("DemoSmokeFeet").gameObject;
-                            smoking.name = "gone";
-                            ParticleSystem[] particleSystems = smoking.GetComponentsInChildren<ParticleSystem>();
-                            foreach (ParticleSystem particleSystem in particleSystems)
-                            {
-                                particleSystem.enableEmission = false;
-                            }
-                            Destroy(smoking, 1f);
+                            StopAndDestroyVFX(smoking, 1f);
                         } while (footR.Find("DemoSmokeFeet"));
 
                     }
@@ -356,13 +387,7 @@ namespace Demolisher
                         do
                         {
                             GameObject smoking = footL.Find("DemoSmokeFeet").gameObject;
-                            smoking.name = "gone";
-                            ParticleSystem[] particleSystems = smoking.GetComponentsInChildren<ParticleSystem>();
-                            foreach (ParticleSystem particleSystem in particleSystems)
-                            {
-                                particleSystem.enableEmission = false;
-                            }
-                            Destroy(smoking, 1f);
+                            StopAndDestroyVFX(smoking, 1f);
                         } while (footL.Find("DemoSmokeFeet"));
                     }
                 }
@@ -375,6 +400,13 @@ namespace Demolisher
             if (buffsToTrack.Contains(buffDef))
             {
                 runDemoInstance.AddBuffBody(buffDef, self);
+            }
+            if (buffDef == AfterSlam)
+            {
+                if (!self.transform.Find("SMAAASH"))
+                {
+                    SpawnEffect(SlamableEffect, self.corePosition, false, Quaternion.identity, OneVector(self.radius * 0.7f), self.transform, "SMAAASH");
+                }
             }
             if (buffDef == VelocityPreserve)
             {
@@ -403,11 +435,20 @@ namespace Demolisher
         private void CharacterMotor_OnLanded(On.RoR2.CharacterMotor.orig_OnLanded orig, CharacterMotor self)
         {
             orig(self);
+            if (self.body.HasBuff(AfterSlam))
+            {
+                self.body.SetBuffCount(AfterSlam.buffIndex, 0);
+            }
             
         }
         private void CharacterMotor_FixedUpdate(On.RoR2.CharacterMotor.orig_FixedUpdate orig, CharacterMotor self)
         {
             orig(self);
+            if (self.body.HasBuff(AfterSlam))
+            {
+                self.velocity = new Vector3(0f, self.velocity.y, 0f);
+                self.rootMotion += self.moveDirection * self.walkSpeed * Time.fixedDeltaTime;
+            }
             if (self.body.HasBuff(VelocityPreserve))
             {
                 self.disableAirControlUntilCollision = true;
@@ -419,7 +460,7 @@ namespace Demolisher
                     var dotProduct = Vector3.Dot(currentVelocity.normalized, wishDirection);
                     //wishDirection = wishDirection * self.walkSpeed;
                     if (dotProduct < 0.10)
-                        self.body.characterMotor.velocity += new Vector3(wishDirection.x * self.walkSpeed * 10, 0, wishDirection.z * self.walkSpeed * 10) * Time.fixedDeltaTime;
+                        self.velocity += new Vector3(wishDirection.x * self.walkSpeed * 10, 0, wishDirection.z * self.walkSpeed * 10) * Time.fixedDeltaTime;
                         //self.velocity += inputBankTest.moveVector * self.walkSpeed * Time.fixedDeltaTime;
                 }
                 
@@ -479,7 +520,8 @@ namespace Demolisher
         public static BuffDef LockedIn;
         public static BuffDef VelocityPreserve;
         public static BuffDef UpgradeOnKill;
-        public static BuffDef SlamClutch;
+        public static BuffDef AfterSlam;
+        public static BuffDef DisableAI;
         public static ItemDef UpgradeItem;
         public static GameObject PillProjectile;
         public static GameObject RocketProjectile;
@@ -495,10 +537,14 @@ namespace Demolisher
         public static GameObject DemoBody;
         public static GameObject SmokeEffect;
         public static GameObject SwingEffect;
+        public static GameObject SpecialSpinner;
         public static GameObject SpinEffect;
         public static GameObject ArmedEffect;
         public static GameObject FullyArmedEffect;
         public static GameObject SwordTrail;
+        public static GameObject Tracer;
+        public static GameObject SlamEffect;
+        public static GameObject SlamableEffect;
         public static Sprite StickyIndicator;
         public static Sprite SwordIndicator;
         public static Sprite ShieldIndicator;
@@ -514,7 +560,7 @@ namespace Demolisher
             buff.iconSprite = sprite;
             buff.isHidden = isHidden;
             buff.isCooldown = isCooldown;
-            ContentAddition.AddBuffDef(buff);
+            buffs.Add(buff); 
             return buff;
         }
         public static ItemDef AddItem(string name, ItemTier tier, Sprite sprite, GameObject prefab, bool canRemove, bool hidden, ItemTag[] tags, ItemDisplayRuleDict itemDisplayRuleDict)
@@ -544,20 +590,25 @@ namespace Demolisher
             LockedIn = AddBuff("LockedIn", true, false, false, false, false);
             VelocityPreserve = AddBuff("PreserveVelocity", false, false, false, true, true);
             UpgradeOnKill = AddBuff("UpgradeOnKill", false, false, false, true, false);
-            SlamClutch = AddBuff("SlamClutch", false, false, false, true, false);
-            buffsToTrack.Add(SlamClutch);
+            AfterSlam = AddBuff("SlamClutch", false, false, false, true, false);
+            buffsToTrack.Add(AfterSlam);
             SmokeEffect = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/SmokingEffect.prefab");
             SmokeEffect.AddComponent<DontRotate>();
-            SwordIndicator = ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/UI/DemoSwordIndicatorThin.png");
-            StickyIndicator = ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/UI/DemoStickyIndicatorThin.png");
+            SwordIndicator = ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/UI/DemoSwordIndicatorThinHalf.png");
+            StickyIndicator = ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/UI/DemoStickyIndicatorThinHalf.png");
             DetonateIndicator = ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/UI/DemoDetonateIndicatorThin.png");
             ShieldIndicator = ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/UI/DemoShieldIndicatorThin.png");
             SwingEffect = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/SwortSwing.prefab");
-            SpinEffect = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/SpecialSwing.prefab");
-            SpinEffect.AddComponent<SpecialSwordSpiner>();
+            SpecialSpinner = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/SpecialSwing.prefab");
+            //SwordSpecialSpinner.AddComponent<SpecialSwordSpiner>();
             ArmedEffect = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/StickyArmedVFX.prefab");
             FullyArmedEffect = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/StickyFullyArmedVFX.prefab");
             SwordTrail = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/SwordTrail.prefab");
+            Tracer = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/DemoTracer.prefab");
+            SpinEffect = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/SpecialSwingNoTrigger.prefab");
+            SlamableEffect = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/SlammableVFX.prefab");
+            SlamableEffect.AddComponent<DontRotate>();
+            SlamEffect = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/SlamVFX.prefab");
             //UpgradeItem = AddItem("DemoStompItem", ItemTier.NoTier, null, null, false, true, new ItemTag[] {ItemTag.WorldUnique}, null);
             List<GameObject> projectiles = new List<GameObject>();
             Main.PillProjectile = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/Projectiles/Pill/PillProjectile.prefab");
@@ -644,14 +695,10 @@ namespace Demolisher
             demoCharacterBody._defaultCrosshairPrefab = Addressables.LoadAssetAsync<GameObject>("RoR2/Base/UI/StandardCrosshair.prefab").WaitForCompletion();
             GameObject gameObject = DemoBody.GetComponent<ModelLocator>().modelTransform.gameObject;
             gameObject.GetComponent<FootstepHandler>().footstepDustPrefab = Addressables.LoadAssetAsync<GameObject>("RoR2/Base/Common/VFX/GenericFootstepDust.prefab").WaitForCompletion();
-            //DemoBody.transform.Find("ModelBase/mdlDemoman/DemoRig/root/base/based/stomach/lower_chest/upper_chest/neck/head/HeadHurtbox").gameObject.layer = LayerIndex.entityPrecise.intVal;
-            //DemoBody.transform.Find("ModelBase/mdlDemoman/DemoRig/root/base/based/stomach/lower_chest/upper_chest/neck/head/HeadHurtbox").gameObject.layer = LayerIndex.entityPrecise.intVal;
             var component = DemoBody.AddComponent<DemoComponent>();
             var skillLocator = DemoBody.GetComponent<SkillLocator>();
-            //skillLocator.allSkills[5].hideInCharacterSelect = true;
-            //DemoBody.AddComponent<CachedSkillsLocator>();
-            GameObject hudObject = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/DemoExtraCrosshair.prefab");
-            hudObject.transform.localScale = new Vector3(-1f, 1f, 1f);
+            GameObject hudObject = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/DemoExtraCrosshairRework.prefab");
+            hudObject.transform.localScale = new Vector3(-1.4f, 1.4f, 1.4f);
             component.chargeMeter = hudObject;
             component.altCrosshair = Addressables.LoadAssetAsync<GameObject>("RoR2/Base/UI/StandardCrosshair.prefab").WaitForCompletion();
             InteractionDriver interactionDriver = DemoBody.GetComponent<InteractionDriver>();
@@ -701,29 +748,14 @@ namespace Demolisher
                 playSound = ScriptableObject.CreateInstance<NetworkSoundEventDef>();
                 playSound.eventName = playSoundString;
                 sounds.Add(playSound);
-                //R2API.ContentAddition.AddNetworkSoundEventDef(playSound);
                 stopSound = ScriptableObject.CreateInstance<NetworkSoundEventDef>();
                 stopSound.eventName = stopSoundString;
                 sounds.Add(stopSound);
-                //R2API.ContentAddition.AddNetworkSoundEventDef(stopSound);
             }
             public string playSoundString;
             public string stopSoundString;
             private NetworkSoundEventDef playSound;
             private NetworkSoundEventDef stopSound;
-        }
-        
-
-        private static void BodyCatalog_getAdditionalEntries(List<GameObject> obj)
-        {
-            obj.Add(DemoBody);
-        }
-
-        private static void SurvivorCatalog_getAdditionalSurvivorDefs(List<SurvivorDef> obj)
-        {
-            SurvivorDef survivorDef = Main.ThunderkitAssets.LoadAsset<SurvivorDef>("Assets/Demoman/DemoSurvivor.asset");
-            //survivorDef.displayPrefab.AddComponent<ThisIsBad>();
-            obj.Add(survivorDef);
         }
 
         public static void Overheal(HealthComponent toHeal, float healFraction)
@@ -735,6 +767,63 @@ namespace Demolisher
             {
                 toHeal.AddBarrier((percentageBefore - (1 - healFraction)) * toHeal.fullHealth);
             }
+        }
+        public static void SpawnEffect(GameObject effectToInstantiate, Vector3 position, bool localPosition, Quaternion rotation, Vector3 scale, Transform parent = null, string name = null)
+        {
+            GameObject instantiatedEffect = Instantiate(effectToInstantiate);
+            Transform transform = instantiatedEffect.transform;
+            if (parent)
+            {
+                transform.SetParent(parent);
+            }
+            if (localPosition)
+            {
+                transform.localPosition = position;
+            }
+            else
+            {
+                transform.position = position;
+            }
+            transform.rotation = rotation;
+            transform.localScale = scale;
+            if (name != null)
+            {
+                instantiatedEffect.name = name;
+            }
+        }
+        public static void SimpleTracer(Vector3 statPosition, Vector3 endPosition, float width = 1f, float fadeTime = 0.3f)
+        {
+            GameObject newTracer = Instantiate(Tracer);
+            LineRenderer lineRenderer = newTracer.transform.GetChild(0).GetComponent<LineRenderer>();
+            lineRenderer.SetPosition(0, statPosition);
+            lineRenderer.SetPosition(1, endPosition);
+            lineRenderer.SetWidth(width, width);
+            DemoTracer demoTracer = newTracer.AddComponent<DemoTracer>();
+            demoTracer.time = fadeTime;
+            demoTracer.lineRenderer = lineRenderer;
+        }
+        public static Vector3 OneVector(float value)
+        {
+            return new Vector3(value, value, value);
+        }
+        public class DemoTracer : MonoBehaviour
+        {
+            public void Start()
+            {
+                if (!lineRenderer) DestroyImmediate(gameObject);
+                initialWidth = lineRenderer.endWidth;
+            }
+            public void FixedUpdate()
+            {
+                stopwatch += Time.fixedDeltaTime;
+                if (stopwatch > time) DestroyImmediate(gameObject);
+                float newWidth = initialWidth * (1 - (stopwatch / time));
+                lineRenderer.SetWidth(newWidth, newWidth);
+            }
+            public float time;
+            private float stopwatch;
+            private float initialWidth;
+            public LineRenderer lineRenderer;
         }
         public enum LanguagePrefixEnum
         {
@@ -956,6 +1045,7 @@ namespace Demolisher
                     }
 
                 }
+                
                 /*
                 foreach (CharacterBody body in bodyList)
                 {
@@ -1313,11 +1403,6 @@ namespace Demolisher
             public OverlayController overlayController;
             public bool updateMeter = true;
             public GameObject hudObject;
-            public Image meterImage;
-            public Image baseMeter;
-            public TextMeshProUGUI stickyText;
-            public TextMeshProUGUI extraPrimaryText;
-            public TextMeshProUGUI extraSecondaryText;
             public GameObject altCrosshair;
             private ChildLocator childLocator;
             private CharacterModel characterModel;
@@ -1327,7 +1412,17 @@ namespace Demolisher
             public Image primaryStopwatch;
             public Transform secondarystockCounter;
             public Image secondaryStopwatch;
-            private GenericSkill trackPrimary;
+            public Image leftMeter;
+            public Image rightMeter;
+            public Image leftMeterBase;
+            public Image rightMeterBase;
+            //public Image baseMeter;
+            //public Image grenadeCharge;
+            public TextMeshProUGUI stickyText;
+            public TextMeshProUGUI extraPrimaryText;
+            public TextMeshProUGUI extraSecondaryText;
+            private GenericSkill trackStickies;
+            private GenericSkill trackSword;
             private GenericSkill trackUtility;
             private CameraTargetParams cameraTargetParams;
             public bool canUseUtility = true;
@@ -1336,6 +1431,8 @@ namespace Demolisher
             public float canUseSecondaryTimer = 0f;
             public bool useUtility;
             public EntityStateMachine bodyStateMachine;
+            public GameObject swordObject;
+            public GameObject shieldObject;
             public int stickyCount
             {
                 get
@@ -1368,7 +1465,7 @@ namespace Demolisher
                 skillLocator = gameObject.GetComponent<SkillLocator>();
                 primaryReplace = skillLocator.FindSkillByFamilyName("DemoStickies");
                 primaryReplace.RecalculateValues();
-                trackPrimary = primaryReplace;
+                trackStickies = primaryReplace;
                 SkillDef detonateSkill = DetonateSkillDef;
                 if (customDetonationSkills.ContainsKey(primaryReplace.baseSkill)) detonateSkill = customDetonationSkills[primaryReplace.baseSkill];
                 utilityReplace = skillLocator.FindSkillByFamilyName("DemoDetonate");
@@ -1418,7 +1515,16 @@ namespace Demolisher
             {
                 //meterImage = controller.instancesList[0].GetComponent<Image>();
             }
-
+            public void DetonateNoLimitStickies()
+            {
+                if (stickies.ContainsKey("All"))
+                {
+                    for (int i = 0; i < stickies["All"].Count; i++)
+                    {
+                        stickies["All"][i].DetonateSticky(0);
+                    }
+                }
+            }
             private void OnOverlayInstanceAdded(OverlayController controller, GameObject @object)
             {
             }
@@ -1440,9 +1546,9 @@ namespace Demolisher
                             Transform weaponTransform = childLocator.FindChild("WeaponR");
                             if (swordModel && weaponTransform)
                             {
-                                GameObject swordNewModel = Instantiate(swordModel, weaponTransform);
-                                swordNewModel.transform.localEulerAngles = new Vector3(0f, 180f, 0f);
-                                list.Add(swordNewModel);
+                                swordObject = Instantiate(swordModel, weaponTransform);
+                                swordObject.transform.localEulerAngles = new Vector3(0f, 180f, 0f);
+                                list.Add(swordObject);
 
                             }
                         }
@@ -1452,8 +1558,8 @@ namespace Demolisher
                             Transform shieldTransform = childLocator.FindChild("Shield");
                             if (shieldModel && shieldTransform)
                             {
-                                GameObject shieldNewModel = Instantiate(shieldModel, shieldTransform);
-                                list.Add(shieldNewModel);
+                                shieldObject = Instantiate(shieldModel, shieldTransform);
+                                list.Add(shieldObject);
 
                             }
                         }
@@ -1492,8 +1598,11 @@ namespace Demolisher
                             overrideRequest = CrosshairUtils.RequestOverrideForBody(characterBody, altCrosshair, CrosshairUtils.OverridePriority.Skill);
                         }
                         
-                        baseMeter.sprite = StickyIndicator;
-                        meterImage.sprite = StickyIndicator;
+                        //baseMeter.sprite = StickyIndicator;
+                        leftMeter.sprite = StickyIndicator;
+                        rightMeter.sprite = StickyIndicator;
+                        leftMeterBase.sprite = StickyIndicator;
+                        rightMeterBase.sprite = StickyIndicator;
                     }
                     else
                     {
@@ -1501,8 +1610,11 @@ namespace Demolisher
                         {
                             overrideRequest.Dispose();
                         }
-                        baseMeter.sprite = SwordIndicator;
-                        meterImage.sprite = SwordIndicator;
+                        //baseMeter.sprite = SwordIndicator;
+                        leftMeter.sprite = SwordIndicator;
+                        rightMeter.sprite = SwordIndicator;
+                        leftMeterBase.sprite = SwordIndicator;
+                        rightMeterBase.sprite = SwordIndicator;
                     }
                 }
             }
@@ -1510,12 +1622,24 @@ namespace Demolisher
             {
                 if (canUseUtility && canUseUtilityTimer > 0f) canUseUtilityTimer -= Time.fixedDeltaTime;
                 if (canUseSecondary && canUseSecondaryTimer > 0f) canUseSecondaryTimer -= Time.fixedDeltaTime;
+                
                 if (!hudObject && overlayController != null && overlayController.instancesList.Count > 0)
                 {
-                    if (!hudObject)
-                    {
-                        hudObject = overlayController.instancesList[0];
-                    }
+                    hudObject = overlayController.instancesList[0];
+                    ChildLocator childLocator = hudObject.GetComponent<ChildLocator>();
+                    //baseMeter = childLocator.FindChild("CenterBase").GetComponent<Image>();
+                    leftMeter = childLocator.FindChild("LeftIndicator").GetComponent<Image>();
+                    rightMeter = childLocator.FindChild("RightIndicator").GetComponent<Image>();
+                    leftMeterBase = leftMeter.transform.parent.GetComponent<Image>();
+                    rightMeterBase = rightMeter.transform.parent.GetComponent<Image>();
+                    //baseMeter = childLocator.FindChild("CenterCharge").GetComponent<Image>();
+                    extraPrimaryText = childLocator.FindChild("LeftText").GetComponent<TextMeshProUGUI>();
+                    extraSecondaryText = childLocator.FindChild("RightText").GetComponent<TextMeshProUGUI>();
+                    //grenadeCharge = childLocator.FindChild("GrenadeCrosshair").GetComponent<Image>();
+                    primaryStopwatch = childLocator.FindChild("LeftStick").GetComponent<Image>();
+                    secondaryStopwatch = childLocator.FindChild("RightStick").GetComponent<Image>();
+                    //Old crosshair
+                    /*
                     if (!baseMeter)
                     {
                         baseMeter = overlayController.instancesList[0].transform.GetChild(0).GetComponent<Image>();
@@ -1551,27 +1675,27 @@ namespace Demolisher
                     if (!extraSecondaryText)
                     {
                         extraSecondaryText = hudObject.transform.Find("chargeMeterBase/extraSecondaryStocksCount").GetComponent<TextMeshProUGUI>();
-                    }
+                    }*/
                     UpdateHudObject();
                 }
-                if (primarystockCounter)
+                if (extraPrimaryText)
                 {
-                    if (trackPrimary)
+                    if (trackStickies)
                     {
-                        int stocks = trackPrimary.stock;
-                        for (int i = 0; i < primarystockCounter.childCount; i++)
-                        {
-                            primarystockCounter.GetChild(i).gameObject.SetActive(stocks > 0 ? true : false);
-                            stocks--;
-                        }
+                        int stocks = trackStickies.stock;
+                        //for (int i = 0; i < primarystockCounter.childCount; i++)
+                        //{
+                        //    primarystockCounter.GetChild(i).gameObject.SetActive(stocks > 0 ? true : false);
+                        //    stocks--;
+                        //}
                         if (stocks > 0)
                         {
-                            extraPrimaryText.gameObject.SetActive(true);
+                            //extraPrimaryText.gameObject.SetActive(true);
                             extraPrimaryText.text = stocks.ToString();
                         }
                         else
                         {
-                            extraPrimaryText.gameObject.SetActive(false);
+                            //extraPrimaryText.gameObject.SetActive(false);
                             extraPrimaryText.text = stocks.ToString();
                         }
                     }
@@ -1581,34 +1705,34 @@ namespace Demolisher
                 }
                 if (skillLocator)
                 {
-                    if (secondarystockCounter)
+                    if (extraSecondaryText)
                     {
                         int stocks = skillLocator.secondary.stock;
-                        for (int i = 0; i < secondarystockCounter.childCount; i++)
-                        {
-                            secondarystockCounter.GetChild(i).gameObject.SetActive(stocks > 0 ? true : false);
-                            stocks--;
-                        }
+                        //for (int i = 0; i < secondarystockCounter.childCount; i++)
+                        //{
+                        //    secondarystockCounter.GetChild(i).gameObject.SetActive(stocks > 0 ? true : false);
+                        //    stocks--;
+                        //}
                         if (stocks > 0)
                         {
-                            extraSecondaryText.gameObject.SetActive(true);
+                            //extraSecondaryText.gameObject.SetActive(true);
                             extraSecondaryText.text = stocks.ToString();
                         }
                         else
                         {
-                            extraSecondaryText.gameObject.SetActive(false);
+                            //extraSecondaryText.gameObject.SetActive(false);
                             extraSecondaryText.text = stocks.ToString();
                         }
                     }
-                    if (primaryStopwatch && trackPrimary)
+                    if (primaryStopwatch && trackStickies)
                     {
-                        if (trackPrimary.stock >= trackPrimary.maxStock)
+                        if (trackStickies.stock >= trackStickies.maxStock)
                         {
                             primaryStopwatch.fillAmount = 1;
                         }
                         else
                         {
-                            primaryStopwatch.fillAmount = 1 - ((trackPrimary.finalRechargeInterval - trackPrimary.rechargeStopwatch) / trackPrimary.finalRechargeInterval);
+                            primaryStopwatch.fillAmount = 1 - ((trackStickies.finalRechargeInterval - trackStickies.rechargeStopwatch) / trackStickies.finalRechargeInterval);
                         }
                         
                     }
@@ -1631,15 +1755,15 @@ namespace Demolisher
                 {
                     stickyText.text = stickyCount.ToString();
                 }
-                if (meterImage && trackUtility && updateMeter)
+                if (leftMeter && trackUtility && updateMeter)
                 {
                     if (trackUtility.stock >= trackUtility.maxStock)
                     {
-                        meterImage.fillAmount = 1;
+                        leftMeter.fillAmount = 1;
                     }
                     else
                     {
-                        meterImage.fillAmount = 1 - ((trackUtility.finalRechargeInterval - trackUtility.rechargeStopwatch) / trackUtility.finalRechargeInterval);
+                        leftMeter.fillAmount = 1 - ((trackUtility.finalRechargeInterval - trackUtility.rechargeStopwatch) / trackUtility.finalRechargeInterval);
                     }
                     
                 }
@@ -1755,6 +1879,21 @@ namespace Demolisher
             }
             public void OnProjectileImpact(ProjectileImpactInfo impactInfo)
             {
+                /*
+                GameObject blocksAndShit = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+                blocksAndShit.layer = LayerIndex.world.intVal;
+                MeshFilter meshFilter = blocksAndShit.GetComponent<MeshFilter>();
+                SphereCollider sphereCollider = blocksAndShit.GetComponent<SphereCollider>();
+                if (sphereCollider != null && meshFilter)
+                {
+                    Destroy(sphereCollider);
+                    MeshCollider meshCollider = blocksAndShit.AddComponent<MeshCollider>();
+                    meshCollider.sharedMesh = meshFilter.sharedMesh;
+                }
+                blocksAndShit.transform.position = impactInfo.estimatedPointOfImpact;
+                blocksAndShit.transform.localScale = new Vector3(6f, 6f, 6f);
+                Destroy(gameObject);
+                return;*/
                 if (!impacted)
                 {
                     HurtBox hurtBox = impactInfo.collider.GetComponent<HurtBox>();
@@ -1820,6 +1959,9 @@ namespace Demolisher
             private ProjectileDamage projectileDamage;
             private DemoExplosionComponent explosionComponent;
             private ProjectileController projectileController;
+            private List<StickyComponent> currentList;
+            private Vector3 explosionPosition;
+            private float radius;
             //public void OnEnable()
             //{
 
@@ -1852,6 +1994,13 @@ namespace Demolisher
                     }
                 }
             }
+            public virtual void OnEnable()
+            {
+                if (currentList != null)
+                {
+                    if (demoComponent && !currentList.Contains(this)) currentList.Add(this);
+                }
+            }
             public virtual void Start()
             {
                 projectileController = GetComponent<ProjectileController>();
@@ -1874,7 +2023,7 @@ namespace Demolisher
                         }
                         GetOrCreateListOfStickies().Add(this);
                     }
-
+                    currentList = GetOrCreateListOfStickies();
                 }
                 projectileDamage = GetComponent<ProjectileDamage>();
                 explosionComponent = GetComponent<DemoExplosionComponent>();
@@ -1897,7 +2046,7 @@ namespace Demolisher
                 }
                 if (projectileDamage)
                     projectileDamage.damage *= damageIncrease;
-                GameObject.Instantiate(armedVFX, transform);
+                GameObject.Instantiate(fullyArmedVFX, transform);
             }
             public List<StickyComponent> GetOrCreateListOfStickies(string listName)
             {
@@ -1943,8 +2092,46 @@ namespace Demolisher
             public virtual void OnDisable()
             {
                 if (demoComponent) GetOrCreateListOfStickies().Remove(this);
+                explosionPosition = transform.position;
+                radius = projectileImpactExplosion.blastRadius;
             }
-
+            public virtual void OnDestroy()
+            {/*
+                Collider[] collidersArray2 = Physics.OverlapSphere(explosionPosition, radius);
+                foreach (Collider collider in collidersArray2)
+                {
+                    MeshFilter meshFilter = collider.GetComponent<MeshFilter>();
+                    if (meshFilter)
+                    {
+                        Mesh mesh = Instantiate(meshFilter.sharedMesh);
+                        if (!mesh.isReadable)
+                        {
+                            mesh = MakeReadableMeshCopy(mesh);
+                        }
+                        //mesh.UploadMeshData(false);
+                        Vector3[] vertices = mesh.vertices;
+                        Vector3[] normals = mesh.normals;
+                        for (int i = 0; i < vertices.Length; i++)
+                        {
+                            
+                            Vector3 vector3 = collider.transform.TransformPoint(vertices[i]);
+                            if (Vector3.Distance(vector3, explosionPosition) < radius)
+                            {
+                                vertices[i] += (vector3 - (explosionPosition + normals[i])).normalized  * 3f;
+                            }
+                        }
+                        mesh.SetVertices(vertices);
+                        mesh.RecalculateBounds();
+                        mesh.RecalculateNormals();
+                        meshFilter.sharedMesh = mesh;
+                        if (collider is MeshCollider)
+                        {
+                            (collider as MeshCollider).sharedMesh = mesh;
+                        }
+                        //mesh.UploadMeshData(true);
+                    }
+                }*/
+            }
             public virtual void OnProjectileImpact(ProjectileImpactInfo impactInfo)
             {
                 if (!isStickable || sticked) return;
@@ -1956,6 +2143,45 @@ namespace Demolisher
                 transform.position += impactInfo.estimatedImpactNormal * 0.01f;
 
             }
+        }
+        public static Mesh MakeReadableMeshCopy(Mesh nonReadableMesh)
+        {
+            Mesh meshCopy = new Mesh();
+            meshCopy.indexFormat = nonReadableMesh.indexFormat;
+
+            // Handle vertices
+            GraphicsBuffer verticesBuffer = nonReadableMesh.GetVertexBuffer(0);
+            int totalSize = verticesBuffer.stride * verticesBuffer.count;
+            byte[] data = new byte[totalSize];
+            verticesBuffer.GetData(data);
+            meshCopy.SetVertexBufferParams(nonReadableMesh.vertexCount, nonReadableMesh.GetVertexAttributes());
+            meshCopy.SetVertexBufferData(data, 0, 0, totalSize);
+            verticesBuffer.Release();
+
+            // Handle triangles
+            meshCopy.subMeshCount = nonReadableMesh.subMeshCount;
+            GraphicsBuffer indexesBuffer = nonReadableMesh.GetIndexBuffer();
+            int tot = indexesBuffer.stride * indexesBuffer.count;
+            byte[] indexesData = new byte[tot];
+            indexesBuffer.GetData(indexesData);
+            meshCopy.SetIndexBufferParams(indexesBuffer.count, nonReadableMesh.indexFormat);
+            meshCopy.SetIndexBufferData(indexesData, 0, 0, tot);
+            indexesBuffer.Release();
+
+            // Restore submesh structure
+            uint currentIndexOffset = 0;
+            for (int i = 0; i < meshCopy.subMeshCount; i++)
+            {
+                uint subMeshIndexCount = nonReadableMesh.GetIndexCount(i);
+                meshCopy.SetSubMesh(i, new SubMeshDescriptor((int)currentIndexOffset, (int)subMeshIndexCount));
+                currentIndexOffset += subMeshIndexCount;
+            }
+
+            // Recalculate normals and bounds
+            meshCopy.RecalculateNormals();
+            meshCopy.RecalculateBounds();
+
+            return meshCopy;
         }
         public class DefaultSticky : StickyComponent
         {
@@ -2176,6 +2402,7 @@ namespace Demolisher
     public class Skills
     {
         public static GameObject explosionVFX = Addressables.LoadAssetAsync<GameObject>("RoR2/Base/Toolbot/OmniExplosionVFXToolbotQuick.prefab").WaitForCompletion();
+        public static GameObject groundSlamVFX = Addressables.LoadAssetAsync<GameObject>("RoR2/Base/Beetle/BeetleGuardGroundSlam.prefab").WaitForCompletion();
         public static SkillFamily demoPrimaryFamily;
         public static SkillFamily demoSecondaryFamily;
         public static SkillFamily demoUtilityFamily;
@@ -2216,6 +2443,7 @@ namespace Demolisher
         public static SkillDef SpecialTwoSkillDef;
         public static SkillDef AltSpecialTwoSkillDef;
         public static SkillDef SlamSkillDef;
+        public static SkillDef BigAssSwordSkillDef;
         public static SkillDef LockInSkillDef;
         public static SkillDef SwapSkillDef;
         public static SkillDef ManthreadsSkillDef;
@@ -2519,9 +2747,10 @@ namespace Demolisher
             //AntigravDetonateSkillDef = AntigravDetonateInit();
             customDetonationSkills.Add(AntigravLauncherSkillDef, LaserTrapDetonateSkillDef);
             SwapSkillDef = Swap(ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoSwapSKillIcon.png"));
-            SpecialOneSkillDef = SpecialInit(typeof(SpecialOneRedirector), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoSpecial1SKillIcon.png"), "DemoSwordTornado", "DEMOMAN_SPECIALONE_NAME", "DEMOMAN_SPECIALONE_DESC", "Extra");
-            SpecialTwoSkillDef = SpecialInit(typeof(UltraInstinctRedirect), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoSpecial2SKillIcon.png"), "DemoSwordStorm", "DEMOMAN_SPECIALTWO_NAME", "DEMOMAN_SPECIALTWO_DESC", "Extra", baseStocks: 2);
+            SpecialOneSkillDef = SpecialInit(typeof(SpecialOneRedirector), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoSpecial1SKillIcon.png"), "DemoSwordTornado", "DEMOMAN_SPECIALONE_NAME", "DEMOMAN_SPECIALONE_DESC", "Body");
+            SpecialTwoSkillDef = SpecialInit(typeof(UltraInstinctRedirect), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoSpecial2SKillIcon.png"), "DemoSwordStorm", "DEMOMAN_SPECIALTWO_NAME", "DEMOMAN_SPECIALTWO_DESC", "Body", baseStocks: 2);
             SlamSkillDef = SpecialInit(typeof(Slam), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoSlamSkillIcon.png"), "DemoSlam", "DEMOMAN_SLAM_NAME", "DEMOMAN_SLAM_DESC", "Extra", rechargeInterval: 6f);
+            BigAssSwordSkillDef = SpecialInit(typeof(BigAssAttackRedirector), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoSlamSkillIcon.png"), "DemoBigAssSword", "DEMOMAN_SLAM_NAME", "DEMOMAN_SLAM_DESC", "Weapon");
             //LockInSkillDef = SpecialInit(typeof(LockIn), null, "DemoLockIn", "DEMOMAN_LOCKIN_NAME", "DEMOMAN_LOCKIN_DESC", "Extra");
             LanguageAPI.Add("DEMOMAN_SPECIALONE_NAME", "Whirlwind");
             LanguageAPI.Add("DEMOMAN_SPECIALONE_DESC", $"Sword style: Enter a whirlwind state where you hit all enemies withtin the sword range every " + LangueagePrefix("0.2", LanguagePrefixEnum.Damage) + " seconds for a half of the sword damage for 3.5 seconds." +
@@ -2683,9 +2912,12 @@ namespace Demolisher
             states.Add(typeof(HookLauncher));
             states.Add(typeof(BombLauncher));
             states.Add(typeof(Detonate));
-            states.Add(typeof(SpecialOneSticky));
-            states.Add(typeof(SpecialOneSword));
+            states.Add(typeof(SpecialOneStickySpiner));
+            states.Add(typeof(SpecialOneSwordSpiner));
             states.Add(typeof(SpecialOneRedirector));
+            states.Add(typeof(BigAssSword));
+            states.Add(typeof(BigAssSticky));
+            states.Add(typeof(BigAssAttackRedirector));
             states.Add(typeof(UltraInstinctRedirect));
             states.Add(typeof(UltraInstinctSticky));
             states.Add(typeof(UltraInstinctSword));
@@ -2875,17 +3107,13 @@ namespace Demolisher
                 if (skillLocator)
                 {
                     swordClass = swordDictionary.ContainsKey(skillLocator.primary.skillDef) ? swordDictionary[skillLocator.primary.skillDef] : DefaultSword;
-                    bulletAttack = ModifyAttack(swordClass.bulletAttack);
+                    //bulletAttack = ModifyAttack(swordClass.bulletAttack);
                     utilitySkill = skillLocator.utility;
-                }
-                if (bulletAttack == null)
-                {
-                    bulletAttack = ModifyAttack(DefaultSword.bulletAttack);
                 }
                 if (stopwatch <= 0)
                 {
-                    float animationTime = swordClass.swingUpTime + swordClass.swingDownTime;
-                    PlayAnimation("Gesture, Override", "Swing", "Slash.playbackRate", animationTime / base.attackSpeedStat, 0.3f);
+                    float animationTime = swordClass.swingUpTime;
+                    PlayAnimation("Gesture, Override", "SwingUp", "Slash.playbackRate", animationTime / base.attackSpeedStat, 0.2f);
                     base.StartAimMode();
                     stopwatch = swordClass.swingUpTime / base.attackSpeedStat;
                     fired = false;
@@ -2901,10 +3129,11 @@ namespace Demolisher
                 }
                 if (!fired && stopwatch < 0)
                 {
+                    bulletAttack = ModifyAttack(swordClass.bulletAttack);
                     //BulletAttack bulletAttack = swordDictionary.ContainsKey(activatorSkillSlot.skillDef) ? ModifyAttack(swordDictionary[activatorSkillSlot.skillDef].bulletAttack) : DefaultSword.bulletAttack;
                     SwingSword(bulletAttack);
                     fired = true;
-                    stopwatch = swordClass.swingDownTime / base.attackSpeedStat;
+                    stopwatch = swordClass.swingDownTime / characterBody.attackSpeed;
 
                 }
                 else if (isAuthority && stopwatch <= 0)
@@ -2986,7 +3215,8 @@ namespace Demolisher
                 }
 
                 Util.PlaySound(DemoSwordSwingSound.playSoundString, gameObject);
-
+                float animationTime = swordClass.swingDownTime;
+                PlayAnimation("Gesture, Override", "SwingDown1", "Slash.playbackRate", animationTime / characterBody.attackSpeed, 0.2f);
 
 
             }
@@ -3036,7 +3266,7 @@ namespace Demolisher
             }
             public virtual void OnEnterAuthority()
             {
-                chargeMeterHUD = demoComponent ? demoComponent.meterImage : null;
+                chargeMeterHUD = demoComponent ? demoComponent.leftMeter : null;
                 if (chargeMeterHUD)
                 {
                     demoComponent.updateMeter = false;
@@ -3263,6 +3493,7 @@ namespace Demolisher
             public float charge = 0f;
             private bool released = false;
             private Image chargeMeter;
+            private bool changeMeter = true;
             public virtual void OnFullChargeEnd()
             {
                 if (!fired)
@@ -3286,10 +3517,10 @@ namespace Demolisher
                 if (base.isAuthority)
                 {
 
-                    chargeMeter = demoComponent ? demoComponent.meterImage : null;
+                    chargeMeter = demoComponent ? demoComponent.rightMeter : null;
                     if (chargeMeter)
                     {
-                        demoComponent.updateMeter = false;
+                        //demoComponent.updateMeter = false;
                         chargeMeter.fillAmount = 0f;
                     }
 
@@ -3304,8 +3535,9 @@ namespace Demolisher
                 if (stopCharge)
                 {
                     stopCharge = true;
-                    if (isAuthority)
-                        demoComponent.updateMeter = true;
+                    changeMeter = false;
+                    //if (isAuthority)
+                    //    demoComponent.updateMeter = true;
                 }
                 TrajectoryAimAssist.ApplyTrajectoryAimAssist(ref aimRay, projectile, base.gameObject, 1f);
                 //Util.PlaySound(DemoGrenadeShootSound.playSoundString, gameObject);
@@ -3330,7 +3562,7 @@ namespace Demolisher
                 }
                 if (chargeMeter)
                 {
-                    chargeMeter.fillAmount = 0f;
+                    chargeMeter.fillAmount = 1f;
                 }
 
 
@@ -3400,7 +3632,7 @@ namespace Demolisher
                 if (true)
                 {
 
-                    if (isAuthority && !stopCharge && chargeMeter)
+                    if (changeMeter && isAuthority && !stopCharge && chargeMeter)
                     {
                         chargeMeter.fillAmount = charge / chargeCap;
                     }
@@ -3430,8 +3662,8 @@ namespace Demolisher
                 {
                     if (chargeMeter)
                     {
-                        demoComponent.updateMeter = true;
-                        chargeMeter.fillAmount = 0f;
+                        //demoComponent.updateMeter = true;
+                        chargeMeter.fillAmount = 1f;
                     }
                 }
 
@@ -3826,6 +4058,23 @@ namespace Demolisher
             {
                 base.OnEnter();
                 DemoComponent demoComponent = GetComponent<DemoComponent>();
+                if (isAuthority)
+                {
+                    if (demoComponent && demoComponent.isSwapped)
+                    {
+                        outer.SetNextState(new SpecialOneStickySpiner
+                        {
+                        });
+                    }
+                    else
+                    {
+                        outer.SetNextState(new SpecialOneSwordSpiner
+                        {
+                        });
+                    }
+                }
+                /*
+                DemoComponent demoComponent = GetComponent<DemoComponent>();
                 EntityStateMachine[] entityStateMachines = gameObject.GetComponents<EntityStateMachine>();
                 EntityStateMachine bodyStateMachine = null;
                 EntityStateMachine weaponStateMachine = null;
@@ -3849,7 +4098,7 @@ namespace Demolisher
                 {
                     if (weaponStateMachine)
                     {
-                        weaponStateMachine.SetNextState(new SpecialOneSticky
+                        bodyStateMachine.SetNextState(new SpecialOneStickySpiner
                         {
                             previousStateMachine = extraStateMachine,
                         });
@@ -3857,7 +4106,7 @@ namespace Demolisher
                     }
                     else
                     {
-                        outer.SetNextState(new SpecialOneSticky());
+                        outer.SetNextState(new SpecialOneStickySpiner());
                     }
 
                 }
@@ -3865,7 +4114,7 @@ namespace Demolisher
                 {
                     if (bodyStateMachine)
                     {
-                        bodyStateMachine.SetNextState(new SpecialOneSword
+                        bodyStateMachine.SetNextState(new SpecialOneSwordSpiner
                         {
                             previousStateMachine = extraStateMachine
                         });
@@ -3873,16 +4122,16 @@ namespace Demolisher
                     }
                     else
                     {
-                        GetComponent<EntityStateMachine>().SetNextState(new SpecialOneSword());
+                        GetComponent<EntityStateMachine>().SetNextState(new SpecialOneSwordSpiner());
                         outer.SetNextStateToMain();
                     }
 
-                }
+                }*/
             }
         }
         public class SpecialSwordSpiner : MonoBehaviour
         {
-            public SpecialOneSword Sword;
+            public SpecialOneSwordSpiner Sword;
             public BulletAttack bulletAttack = DefaultSword.bulletAttack;
             public List<CharacterBody> charactersBlacklist = new List<CharacterBody>();
             public Dictionary<Collider, CharacterBody> keyValuePairs = new Dictionary<Collider, CharacterBody>();
@@ -3937,195 +4186,604 @@ namespace Demolisher
                 }
             }
         }
-        public class SpecialOneSword : BaseState
+        public class SpecialStickySpiner : MonoBehaviour
+        {
+            public BoxCollider boxCollider;
+            public void Start()
+            {
+                boxCollider = GetComponent<BoxCollider>();
+            }
+            public void FireProjectile(GameObject projectile, float damage, bool crit)
+            {
+                Bounds bounds = boxCollider.bounds;
+                FireProjectileInfo fireProjectileInfo = new FireProjectileInfo
+                {
+                    projectilePrefab = projectile,
+                    position = new Vector3(
+                    Random.Range(bounds.min.x, bounds.max.x),
+                    Random.Range(bounds.min.y, bounds.max.y),
+                    Random.Range(bounds.min.z, bounds.max.z)
+                ),
+                    rotation = Quaternion.LookRotation(Physics.gravity * -1f),
+                    procChainMask = default,
+                    owner = gameObject,
+                    damage = damage,
+                    crit = crit,
+                    force = 200f,
+                    damageColorIndex = DamageColorIndex.Default,
+                    damageTypeOverride = new DamageTypeCombo?(new DamageTypeCombo(DamageType.Generic, DamageTypeExtended.Generic, DamageSource.Special)),
+                    speedOverride = 30
+                };
+                ProjectileManager.instance.FireProjectile(fireProjectileInfo);
+            }
+        }
+        public abstract class SpecialSpinner : BaseState
         {
             private float stopwatch = 0f;
-            private float timer = 4f;
-            private float hitsPerSecond = 4;
+            public abstract float timer { get; }
+            public abstract float rotationsPerSecond {get; }
             private float hitStopwatch = 0f;
             private float hitTimer = 1f;
             private bool fired = false;
-            private float speed = 1f;
             private float animationTimer = 1f;
             private Vector3 currentVector = Vector3.zero;
-            private BulletAttack bulletAttack;
-            private SpecialSwordSpiner specialSwordSpiner;
-            private GameObject spinner;
-            private Vector3 rotationVector = Vector3.zero;
+            public Vector3 rotationVector = Vector3.zero;
             public EntityStateMachine previousStateMachine;
             public override void OnEnter()
             {
                 base.OnEnter();
                 if (!characterDirection) outer.SetNextStateToMain();
                 fired = true;
-                speed = base.attackSpeedStat;
-                PlayAnimation("FullBody, Override", "SpinStart", "Slash.playbackRate", 0.5f / 1.2f / speed);
+                PlayAnimation("FullBody, Override", "Spin", "Slash.playbackRate", timer);
                 currentVector = inputBank ? inputBank.moveVector : transform.forward;
-                if (characterMotor)
-                {
-                    characterMotor.useGravity = false;
-                    characterMotor.velocity.y = 0f;
-                }
-                bulletAttack = swordDictionary.ContainsKey(skillLocator.primary.skillDef) ? swordDictionary[skillLocator.primary.skillDef].bulletAttack : DefaultSword.bulletAttack;
                 if (NetworkServer.active)
-                    characterBody.AddBuff(RoR2Content.Buffs.ArmorBoost);
-                spinner = GameObject.Instantiate(SpinEffect);
+                    characterBody.AddBuff(RoR2Content.Buffs.SmallArmorBoost);
+            }
+            public override void OnExit()
+            {
+                base.OnExit();
+                if (NetworkServer.active)
+                    characterBody.RemoveBuff(RoR2Content.Buffs.SmallArmorBoost);
+                if (previousStateMachine != null) previousStateMachine.SetNextStateToMain();
+            }
+            public virtual void OnFullRotation()
+            {
+                hitStopwatch = 0f;
+            }
+            public override void FixedUpdate()
+            {
+                base.FixedUpdate();
+                stopwatch += GetDeltaTime();
+                if (inputBank && characterMotor)
+                {
+                    currentVector = Vector3.MoveTowards(currentVector, inputBank.moveVector, 1 * GetDeltaTime());
+                    characterMotor.rootMotion += ((currentVector * characterMotor.walkSpeed * 2) * GetDeltaTime());
+                }
+                rotationVector = Quaternion.AngleAxis(360 * rotationsPerSecond * Time.fixedDeltaTime * characterBody.attackSpeed, Vector3.up) * rotationVector;
+                characterDirection.forward = rotationVector;
+                hitStopwatch += GetDeltaTime();
+                if (hitStopwatch >= hitTimer / rotationsPerSecond / characterBody.attackSpeed)
+                {
+                    OnFullRotation();
+                    
+                }
+                if (stopwatch > timer)
+                {
+                    PlayAnimation("FullBody, Override", "SpinEnd", "Slash.playbackRate", 1 / 2);
+                    outer.SetNextStateToMain();
+                }
+
+
+            }
+        }
+        public class SpecialOneSwordSpiner : SpecialSpinner
+        {
+            public override float timer => 4f;
+
+            public override float rotationsPerSecond => 4f;
+            private BulletAttack bulletAttack;
+            private SpecialSwordSpiner specialSwordSpiner;
+            private GameObject spinner;
+            public override void OnEnter()
+            {
+                base.OnEnter();
+                bulletAttack = swordDictionary.ContainsKey(skillLocator.primary.skillDef) ? swordDictionary[skillLocator.primary.skillDef].bulletAttack : DefaultSword.bulletAttack;
+                spinner = GameObject.Instantiate(Main.SpecialSpinner);
                 spinner.transform.parent = characterDirection.targetTransform;
                 spinner.transform.rotation = characterDirection.targetTransform.rotation;
                 spinner.transform.position = inputBank.aimOrigin;
                 spinner.transform.localScale = new Vector3(bulletAttack.maxDistance, 1f, bulletAttack.maxDistance);
                 rotationVector = characterDirection.forward;
-                specialSwordSpiner = spinner.GetComponent<SpecialSwordSpiner>();
+                specialSwordSpiner = spinner.AddComponent<SpecialSwordSpiner>();
                 specialSwordSpiner.Sword = this;
                 specialSwordSpiner.bulletAttack = bulletAttack;
             }
             public override void OnExit()
             {
                 base.OnExit();
-                if (characterMotor) characterMotor.useGravity = true;
-                if (NetworkServer.active)
-                characterBody.RemoveBuff(RoR2Content.Buffs.ArmorBoost);
                 Destroy(spinner);
-                if (previousStateMachine != null) previousStateMachine.SetNextStateToMain();
+            }
+            public override void OnFullRotation()
+            {
+                base.OnFullRotation();
+                specialSwordSpiner.charactersBlacklist.Clear();
+            }
+        }
+        public class SpecialOneStickySpiner : SpecialSpinner
+        {
+            public override float timer => 1f;
+            public SpecialStickySpiner specialStickySpiner;
+            public override float rotationsPerSecond => 4f;
+            private GameObject spinner;
+            private GameObject projectile;
+            private float damage;
+            private float newStopwatch = 0;
+            private DemoComponent demoComponent;
+            private bool crit = false;
+            public override void OnEnter()
+            {
+                base.OnEnter();
+                DemoStickyClass demoSticky = bombProjectiles.ContainsKey(skillLocator.primary.skillDef) ? bombProjectiles[skillLocator.primary.skillDef] : null;
+                projectile = demoSticky != null ? demoSticky.stickyObject : LegacyResourcesAPI.Load<GameObject>("Prefabs/Projectiles/FireMeatBall");
+                damage = demoSticky != null ? demoSticky.stickyState.damage : 4;
+                spinner = GameObject.Instantiate(Main.SpecialSpinner);
+                spinner.transform.parent = characterDirection.targetTransform;
+                spinner.transform.rotation = characterDirection.targetTransform.rotation;
+                spinner.transform.position = inputBank.aimOrigin;
+                spinner.transform.localScale = new Vector3(1f, 1f, 1f);
+                rotationVector = characterDirection.forward;
+                demoComponent = GetComponent<DemoComponent>();
+                if (demoComponent)
+                {
+                    demoComponent.DetonateNoLimitStickies();
+                    demoComponent.noLimitStickies++;
+                }
+                specialStickySpiner = spinner.AddComponent<SpecialStickySpiner>();
+            }
+            public override void OnExit()
+            {
+                base.OnExit();
+                Destroy(spinner);
+                if (demoComponent)
+                {
+                    demoComponent.noLimitStickies--;
+                }
             }
             public override void FixedUpdate()
             {
                 base.FixedUpdate();
-                if (inputBank && characterMotor)
+                newStopwatch += GetDeltaTime();
+                if (newStopwatch > 0.1f)
                 {
-                    currentVector = Vector3.MoveTowards(currentVector, inputBank.moveVector, 1 * GetDeltaTime());
-                    characterMotor.velocity += Physics.gravity / 2 * GetDeltaTime();
-                    characterMotor.rootMotion += ((currentVector * characterMotor.walkSpeed * 2) * GetDeltaTime());
+                    if (isAuthority)
+                    {
+                        specialStickySpiner.FireProjectile(projectile, base.damageStat, RollCrit());
+                    }
+                    Util.PlaySound(DemoGrenadeShootSound.playSoundString, gameObject);
+                    PlayAnimation("Gun, Override", "ShootGun");
+                    newStopwatch = 0;
+                    
                 }
-                rotationVector = Quaternion.AngleAxis(360 * hitsPerSecond * Time.fixedDeltaTime * characterBody.attackSpeed, Vector3.up) * rotationVector;
-                characterDirection.forward = rotationVector;
-                hitStopwatch += Time.fixedDeltaTime;
-                if (hitStopwatch >= hitTimer / hitsPerSecond / characterBody.attackSpeed)
-                {
-                    specialSwordSpiner.charactersBlacklist.Clear();
-                    hitStopwatch = 0f;
-                }
-                timer -= Time.fixedDeltaTime;
-                if (timer < 0)
-                {
-                    PlayAnimation("FullBody, Override", "SpinEnd", "Slash.playbackRate", 1 / speed / 2);
-                    outer.SetNextStateToMain();
-                }
-
-
+            }
+            public override void OnFullRotation()
+            {
+                base.OnFullRotation();
             }
         }
-        public class SpecialOneSticky : BaseState
+        public abstract class BigAssAttack : BaseState
         {
-            private float stopwatch = 0f;
-            private float timer = 0f;
-            private int fireTimes = 0;
-            private int fireCount = 0;
-            private DemoComponent demoComponent;
-            private Vector3 forward;
-            private GameObject projectile;
-            private float damage;
-            public EntityStateMachine previousStateMachine;
+            private int stage = 0;
+            public float power = 0f;
+            public abstract float chargeCap { get; }
+            public bool isCharged = false;
+            public DemoComponent demoComponent;
+            public Image chargeImage;
             public override void OnEnter()
             {
                 base.OnEnter();
                 demoComponent = GetComponent<DemoComponent>();
-
-                timer = 0.1f / base.attackSpeedStat;
-                forward = Vector3.up;
-                if (inputBank) forward = inputBank.aimDirection;
-                if (demoComponent)
+                chargeImage = demoComponent ? demoComponent.rightMeter : null;
+            }
+            public override void FixedUpdate()
+            {
+                base.FixedUpdate();
+                if (stage == 0)
                 {
-                    demoComponent.noLimitStickies++;
-                    demoComponent.additionalArmTime -= 10f;
+                    if (inputBank && inputBank.skill4.down)
+                    {
+                        OnHold();
+                        if (power < chargeCap)
+                        {
+                            if (isAuthority)
+                            chargeImage.fillAmount = power;
+                            power += GetDeltaTime() * characterBody.attackSpeed;
+                        }
+                        else if (!isCharged)
+                        {
+                            isCharged = true;
+                            OnFullCharge();
+                        }
+                    }
+                    else
+                    {
+                        OnRelease();
+                    }
                 }
+                
+                
+            }
+            public virtual void OnFullCharge()
+            {
+                if (isAuthority)
+                    chargeImage.fillAmount = 1f;
+            }
+            public virtual void OnHold()
+            {
+                characterBody.SetAimTimer(2f);
+            }
+            public override void OnExit()
+            {
+                base.OnExit();
+                if (isAuthority)
+                    chargeImage.fillAmount = 1f;
+            }
+            public virtual void OnRelease()
+            {
+                outer.SetNextStateToMain();
+            }
+        }
+        public class BigAssSword : BigAssAttack
+        {
+            public override float chargeCap => 3f;
+            public DemoSwordClass swordClass;
+            public Transform swordTransform;
+            public Vector3 previousScale;
+            public override void OnEnter()
+            {
+                base.OnEnter();
+                swordClass = swordDictionary.ContainsKey(skillLocator.primary.skillDef) ? swordDictionary[skillLocator.primary.skillDef] : DefaultSword;
+                Transform modelTransform = GetComponent<ModelLocator>()?.modelTransform;
+                ChildLocator childLocator = modelTransform?.GetComponent<ChildLocator>();
+                if (childLocator)
+                {
+                    swordTransform = childLocator.FindChild("WeaponR");
+                    if (swordTransform != null)
+                    {
+                        previousScale = swordTransform.localScale;
+                    }
+                }
+                PlayAnimation("Gesture, Override", "SwingUp", "Slash.playbackRate", swordClass.swingUpTime / base.attackSpeedStat, 0.2f);
+            }
+            public override void OnHold()
+            {
+                base.OnHold();
+                if (!isCharged && swordTransform)
+                {
+                    swordTransform.localScale = Vector3.MoveTowards(swordTransform.localScale, previousScale + new Vector3(chargeCap, chargeCap, chargeCap), GetDeltaTime());
+                }
+            }
+            public override void OnRelease()
+            {
+                BulletAttack swordAttack = swordClass.bulletAttack;
+                Vector3 center = inputBank ? inputBank.aimOrigin + characterDirection.forward * swordAttack.maxDistance : transform.position + characterDirection.forward * swordAttack.maxDistance;
+                if (isAuthority)
+                {
+                    BulletAttack bulletAttack2 = new BulletAttack()
+                    {
+                        radius = swordAttack.maxDistance,
+                        aimVector = Vector3.up,
+                        damage = base.damageStat * (swordAttack != null ? swordAttack.damage : 5f) * 2 * (1 + power),
+                        bulletCount = 1,
+                        spreadPitchScale = 0f,
+                        spreadYawScale = 0f,
+                        maxSpread = 0f,
+                        minSpread = 0f,
+                        maxDistance = swordAttack.maxDistance,
+                        allowTrajectoryAimAssist = false,
+                        hitMask = LayerIndex.entityPrecise.mask,
+                        stopperMask = LayerIndex.noCollision.mask,
+                        procCoefficient = swordAttack != null ? swordAttack.procCoefficient : 1f,
+                        damageType = new DamageTypeCombo(DamageType.Generic, DamageTypeExtended.Generic, DamageSource.Special),
+                        force = 300f,// swordAttack != null ? swordAttack.force : 1f,
+                        falloffModel = BulletAttack.FalloffModel.None,
+                        damageColorIndex = DamageColorIndex.Default,
+                        isCrit = base.RollCrit(),
+                        origin = center,
+                        owner = gameObject,
+                        hitCallback = swordAttack != null ? swordAttack.hitCallback : default,
+
+                    };
+                    bulletAttack2.Fire();
+
+                }
+                EffectData effectData = new EffectData
+                {
+                    origin = center,
+                    scale = swordAttack.radius
+                };
+                EffectManager.SpawnEffect(groundSlamVFX, effectData, true);
+                PlayAnimation("Gesture, Override", "SwingDown1", "Slash.playbackRate", swordClass.swingDownTime / characterBody.attackSpeed, 0.2f);
+                if (swordTransform)
+                {
+                    swordTransform.localScale = previousScale;
+                }
+                base.OnRelease();
+            }
+        }
+        public class BigAssSticky : BigAssAttack
+        {
+            public override float chargeCap => 3f;
+            public GameObject projectile;
+            public float damage;
+            public Transform cannonTransform;
+            public Vector3 previousScale;
+            public override void OnEnter()
+            {
+                base.OnEnter();
                 DemoStickyClass demoSticky = bombProjectiles.ContainsKey(skillLocator.primary.skillDef) ? bombProjectiles[skillLocator.primary.skillDef] : null;
                 projectile = demoSticky != null ? demoSticky.stickyObject : LegacyResourcesAPI.Load<GameObject>("Prefabs/Projectiles/FireMeatBall");
                 damage = demoSticky != null ? demoSticky.stickyState.damage : 4;
-                StickyComponent stickyComponent = demoSticky != null ? demoSticky.stickyObject.GetComponent<StickyComponent>() : null;
-                fireTimes = stickyComponent != null ? stickyComponent.maxStickies : 8;
+                demoComponent = GetComponent<DemoComponent>();
+                
+                Transform modelTransform = GetComponent<ModelLocator>()?.modelTransform;
+                ChildLocator childLocator = modelTransform?.GetComponent<ChildLocator>();
+                if (childLocator)
+                {
+                    cannonTransform = childLocator.FindChild("HeadCannon");
+                    if (cannonTransform != null)
+                    {
+                        previousScale = cannonTransform.localScale;
+                    }
+                }
+            }
+            public override void OnHold()
+            {
+                base.OnHold();
+                if (!isCharged && cannonTransform)
+                {
+                    cannonTransform.localScale = Vector3.MoveTowards(cannonTransform.localScale, previousScale + new Vector3(chargeCap, chargeCap, chargeCap), GetDeltaTime());
+                }
+            }
+            public override void OnRelease()
+            {
+                if (demoComponent)
+                {
+                    demoComponent.DetonateNoLimitStickies();
+                    demoComponent.noLimitStickies++;
+                }
+                if (isAuthority)
+                {
+                    FireProjectileInfo fireProjectileInfo = new FireProjectileInfo
+                    {
+                        projectilePrefab = projectile,
+                        position = inputBank ? inputBank.aimOrigin : transform.position,
+                        rotation = Util.QuaternionSafeLookRotation(inputBank ? inputBank.aimDirection : transform.rotation.eulerAngles),
+                        procChainMask = default,
+                        owner = gameObject,
+                        damage = base.damageStat * damage * (1 + power),
+                        crit = RollCrit(),
+                        force = 200f,
+                        damageColorIndex = DamageColorIndex.Default,
+                        damageTypeOverride = new DamageTypeCombo?(new DamageTypeCombo(DamageType.Generic, DamageTypeExtended.Generic, DamageSource.Special))
+                    };
+                    ProjectileManager.instance.FireProjectile(fireProjectileInfo);
+                }
+                PlayAnimation("Gun, Override", "ShootGun");
+                Util.PlaySound(DemoGrenadeShootCritSound.playSoundString, gameObject);
+                if (cannonTransform)
+                {
+                    cannonTransform.localScale = previousScale;
+                }
+                if (demoComponent)
+                {
+                    demoComponent.noLimitStickies--;
+                }
+                base.OnRelease();
+            }
+        }
+        public class BigAssAttackRedirector : BaseState
+        {
+            public override void OnEnter()
+            {
+                base.OnEnter();
+                DemoComponent demoComponent = GetComponent<DemoComponent>();
+                if (isAuthority)
+                {
+                    if (demoComponent && demoComponent.isSwapped)
+                    {
+                        outer.SetNextState(new BigAssSticky
+                        {
+                        });
+                    }
+                    else
+                    {
+                        outer.SetNextState(new BigAssSword
+                        {
+                        });
+                    }
+                }
+            }
+        }
+        public abstract class UltraInstinctRework : BaseState
+        {
+            public List<CharacterBody> bodies = new List<CharacterBody>();
+            public abstract float searchRadius { get; }
+            private float stopwatch = 0f;
+            private int stage = 0;
+            private CharacterBody previousBody;
+            private Vector3 direction;
+            private Vector3 position;
+            public GameObject effect = SwingEffect;
+            public EntityStateMachine previousStateMachine;
+            public override void OnEnter()
+            {
+                base.OnEnter();
+                Collider[] collidersArray = Physics.OverlapSphere(transform.position, searchRadius, LayerIndex.entityPrecise.mask, QueryTriggerInteraction.UseGlobal);
+                foreach (Collider collider in collidersArray)
+                {
+                    CharacterBody body = collider.GetComponent<HurtBox>() ? collider.GetComponent<HurtBox>().healthComponent.body : null;
+                    if (body && body.teamComponent.teamIndex != characterBody.teamComponent.teamIndex && !bodies.Contains(body))
+                    {
+                        bodies.Add(body);
+                    }
+                }
+                if (bodies.Count > 0)
+                {
+                    stopwatch = 0.5f;
+                }
+                else
+                {
+                    outer.SetNextStateToMain();
+                }
+            }
+            public override void OnExit()
+            {
+                base.OnExit();
+                if (previousStateMachine) previousStateMachine.SetNextStateToMain();
+            }
+            public override void FixedUpdate()
+            {
+                base.FixedUpdate();
+                stopwatch -= Time.fixedDeltaTime;
+                if (stopwatch < 0 && stage == 0)
+                {
+                    for (int i = 0; i < bodies.Count; i++)
+                    {
+                        CharacterBody enemyBody = bodies[i];
+                        Vector3 enemyBodyPosition = enemyBody.mainHurtBox.transform.position;
+                        Vector3 previousBodyPosition = previousBody ? previousBody.mainHurtBox.transform.position : characterBody.aimOrigin;
+                        if (previousBody)
+                        {
+                            position = previousBodyPosition;
+                            direction = enemyBody.mainHurtBox.transform.position - previousBodyPosition;
+                        }
+                        else
+                        {
+                            position = characterBody.aimOrigin;
+                            direction = enemyBody.mainHurtBox.transform.position - characterBody.aimOrigin;
+                        }
+                        
+                        Action(enemyBody, enemyBodyPosition, previousBodyPosition);
+                        previousBody = enemyBody;
+                    }
+                    stage++;
+                    outer.SetNextStateToMain();
+                }
+            }
+            public virtual void Action(CharacterBody enemyBody, Vector3 enemyPosition, Vector3 previousPosition)
+            {
+                SimpleTracer(previousPosition, enemyPosition, 10f);
+                //GameObject swingEffectcopy = GameObject.Instantiate(effect);
+                //swingEffectcopy.transform.position = position;
+                //swingEffectcopy.transform.rotation = Quaternion.LookRotation(direction);
+                //List<ParticleSystem> particleSystems = new List<ParticleSystem>();
+                //ParticleSystem particleSystem = swingEffectcopy.transform.Find("mainSwing").GetComponent<ParticleSystem>();
+                //particleSystems.Add(particleSystem);
+                ////ParticleSystem particleSystem2 = swingEffectcopy.transform.Find("mainSwing2").GetComponent<ParticleSystem>();
+                ////particleSystems.Add(particleSystem2);
+                //foreach (ParticleSystem particle in particleSystems)
+                //{
+                //    var vel = particleSystem.velocityOverLifetime;
+                //    vel.speedModifier = direction.magnitude;
+                //}
+            }
+        }
+        public class UltraInstinctReworkSword : UltraInstinctRework
+        {
+            public BulletAttack bulletAttack;
+            public override float searchRadius => 24;
+            public override void OnEnter()
+            {
+                base.OnEnter();
+                bulletAttack = swordDictionary.ContainsKey(skillLocator.primary.skillDef) ? swordDictionary[skillLocator.primary.skillDef].bulletAttack : DefaultSword.bulletAttack;
+            }
+            public override void Action(CharacterBody enemyBody, Vector3 enemyPosition, Vector3 previousPosition)
+            {
+                base.Action(enemyBody, enemyPosition, previousPosition);
+                if (isAuthority)
+                {
+                    BulletAttack bulletAttack2 = new BulletAttack()
+                    {
+                        radius = 0.1f,
+                        aimVector = Vector3.up,
+                        damage = base.damageStat * (bulletAttack != null ? bulletAttack.damage : 3f),
+                        bulletCount = 1,
+                        spreadPitchScale = 0f,
+                        spreadYawScale = 0f,
+                        maxSpread = 0f,
+                        minSpread = 0f,
+                        maxDistance = 0.1f,
+                        allowTrajectoryAimAssist = false,
+                        hitMask = LayerIndex.entityPrecise.mask,
+                        procCoefficient = bulletAttack != null ? bulletAttack.procCoefficient : 1f,
+                        stopperMask = LayerIndex.entityPrecise.mask,
+                        damageType = new DamageTypeCombo(DamageType.Generic, DamageTypeExtended.Generic, DamageSource.Special),
+                        force = bulletAttack != null ? bulletAttack.force : 1f,
+                        falloffModel = BulletAttack.FalloffModel.None,
+                        damageColorIndex = DamageColorIndex.Default,
+                        isCrit = base.RollCrit(),
+                        origin = enemyPosition,
+                        owner = gameObject,
+                        hitCallback = bulletAttack != null ? bulletAttack.hitCallback : default,
 
-
+                    };
+                    bulletAttack2.Fire();
+                }
+                
+            }
+        }
+        public class UltraInstinctReworkSticky : UltraInstinctRework
+        {
+            public GameObject projectile;
+            public float damage;
+            public DemoComponent demoComponent;
+            public override float searchRadius => 24f;
+            public override void OnEnter()
+            {
+                base.OnEnter();
+                DemoStickyClass demoSticky = bombProjectiles.ContainsKey(skillLocator.primary.skillDef) ? bombProjectiles[skillLocator.primary.skillDef] : null;
+                projectile = demoSticky != null ? demoSticky.stickyObject : LegacyResourcesAPI.Load<GameObject>("Prefabs/Projectiles/FireMeatBall");
+                damage = demoSticky != null ? demoSticky.stickyState.damage : 4;
+                demoComponent = GetComponent<DemoComponent>();
+                if (demoComponent)
+                {
+                    demoComponent.DetonateNoLimitStickies();
+                    demoComponent.noLimitStickies++;
+                }
             }
             public override void OnExit()
             {
                 base.OnExit();
                 if (demoComponent)
                 {
-                    //DetonateAllStickies(demoComponent);
                     demoComponent.noLimitStickies--;
-                    demoComponent.additionalArmTime += 10f;
-                }
-                if (previousStateMachine)
-                {
-                    previousStateMachine.SetNextStateToMain();
                 }
             }
-            public virtual void ModifyProjectileFireInfo(ref FireProjectileInfo fireProjectileInfo)
+            public override void Action(CharacterBody enemyBody, Vector3 enemyPosition, Vector3 previousPosition)
             {
-
-            }
-
-            public override void FixedUpdate()
-            {
-                base.FixedUpdate();
-                stopwatch += Time.fixedDeltaTime;
-                if (stopwatch > timer && fireCount <= fireTimes)
+                base.Action(enemyBody, enemyPosition, previousPosition);
+                if (isAuthority)
                 {
-                    if (isAuthority)
+                    FireProjectileInfo fireProjectileInfo = new FireProjectileInfo
                     {
-                        Vector3 vector2 = characterBody.characterMotor ? (transform.position + Vector3.up * (characterBody.characterMotor.capsuleHeight * 0.5f + 2f)) : (transform.position + Vector3.up * 2f);
-                        InputBankTest component6 = characterBody.inputBank;
-                        Vector3 forward2 = component6 ? component6.aimDirection : transform.forward;
-                        float num15 = 20f;
-                        float minInclusive = 40f;
-                        float maxInclusive = 50f;
-                        float speedOverride2 = UnityEngine.Random.Range(minInclusive, maxInclusive);
-                        float num17 = (float)(360 / fireTimes);
-                        float num18 = num17 / 360f;
-                        float num19 = 1f;
-                        float num20 = num17;
-                        float num21 = (float)fireCount * 3.1415927f * 2f / (float)fireTimes;
-                        num20 += num17;
-
-                        //forward2.x += UnityEngine.Random.Range(-num15, num15);
-                        //forward2.z += UnityEngine.Random.Range(-num15, num15);
-                        //forward2.y += UnityEngine.Random.Range(-num15, num15);
-
-                        FireProjectileInfo fireProjectileInfo = new FireProjectileInfo
-                        {
-                            projectilePrefab = projectile,
-                            position = component6 ? component6.aimOrigin : transform.position,
-                            rotation = Util.QuaternionSafeLookRotation(forward2),
-                            procChainMask = default,
-                            owner = gameObject,
-                            damage = base.damageStat * damage,
-                            crit = RollCrit(),
-                            force = 200f,
-                            damageColorIndex = DamageColorIndex.Default,
-                            damageTypeOverride = new DamageTypeCombo?(new DamageTypeCombo(DamageType.Generic, DamageTypeExtended.Generic, DamageSource.Special))
-                        };
-                        ModifyProjectileFireInfo(ref fireProjectileInfo);
-                        ProjectileManager.instance.FireProjectile(fireProjectileInfo);
-                    }
-
-                    stopwatch = 0f;
-                    fireCount++;
+                        projectilePrefab = projectile,
+                        position = enemyPosition,
+                        rotation = Util.QuaternionSafeLookRotation(Vector3.up),
+                        procChainMask = default,
+                        owner = gameObject,
+                        damage = base.damageStat * damage,
+                        crit = RollCrit(),
+                        force = 200f,
+                        damageColorIndex = DamageColorIndex.Default,
+                        damageTypeOverride = new DamageTypeCombo?(new DamageTypeCombo(DamageType.Generic, DamageTypeExtended.Generic, DamageSource.Special)),
+                        speedOverride = 1,
+                        useSpeedOverride = true
+                    };
+                    ProjectileManager.instance.FireProjectile(fireProjectileInfo);
                 }
-
-
-                if (fireCount > fireTimes)
-                {
-
-                    outer.SetNextStateToMain();
-                }
-
-
+                
             }
-
-
         }
-
         public abstract class UltraInstinctState : BaseState, ISkillState
         {
             public List<CharacterBody> bodies = new List<CharacterBody>();
@@ -4147,7 +4805,7 @@ namespace Demolisher
             public GenericSkill activatorSkillSlot { get; set; }
             public virtual void OnFound()
             {
-
+                
             }
             public virtual void OnContact()
             {
@@ -4321,25 +4979,25 @@ namespace Demolisher
             {
                 base.OnEnter();
                 DemoComponent demoComponent = GetComponent<DemoComponent>();
-                EntityStateMachine bodyStateMachine = GetComponent<EntityStateMachine>();
+                //EntityStateMachine bodyStateMachine = GetComponent<EntityStateMachine>();
                 if (isAuthority)
                 {
                     if (demoComponent && demoComponent.isSwapped)
                     {
-                        bodyStateMachine.SetNextState(new UltraInstinctSticky
+                        outer.SetNextState(new UltraInstinctReworkSticky
                         {
-                            activatorSkillSlot = activatorSkillSlot,
-                            previousStateMachine = activatorSkillSlot.stateMachine,
+                            //activatorSkillSlot = activatorSkillSlot,
+                            //previousStateMachine = activatorSkillSlot.stateMachine,
                         });
                     }
                     else
                     {
-                        UltraInstinctSword ultraInstinctSword = new UltraInstinctSword();
-                        ultraInstinctSword.activatorSkillSlot = activatorSkillSlot;
-                        bodyStateMachine.SetNextState(new UltraInstinctSword
+                        //UltraInstinctSword ultraInstinctSword = new UltraInstinctSword();
+                        //ultraInstinctSword.activatorSkillSlot = activatorSkillSlot;
+                        outer.SetNextState(new UltraInstinctReworkSword
                         {
-                            activatorSkillSlot = activatorSkillSlot,
-                            previousStateMachine = activatorSkillSlot.stateMachine,
+                            //activatorSkillSlot = activatorSkillSlot,
+                            //previousStateMachine = activatorSkillSlot.stateMachine,
                         });
                     }
                 }
@@ -4496,6 +5154,7 @@ namespace Demolisher
             private float height;
             private float stopwatch = 0f;
             private bool slaming = false;
+            private float radius = 24f;
             public override void OnEnter()
             {
                 base.OnEnter();
@@ -4548,13 +5207,13 @@ namespace Demolisher
                 base.Update();
                 if (stopwatch > 0 && characterMotor && inputBank && inputBank.jump.justPressed)
                 {
+                    SpawnEffect(SlamEffect, characterBody.footPosition, false, Quaternion.identity, OneVector(characterBody.radius));
                     if (characterMotor.Motor)
                         characterMotor.Motor.ForceUnground(0f);
                     characterMotor.velocity.y = height + 5f;
                     if (NetworkServer.active)
                     {
-                        characterBody.AddTimedBuff(SlamClutch, 10f);
-                        characterBody.AddTimedBuff(RoR2Content.Buffs.WhipBoost, 10f);
+                        characterBody.AddBuff(AfterSlam);
                     }
                     outer.SetNextStateToMain();
                 }
@@ -4562,9 +5221,10 @@ namespace Demolisher
             public void SlamMethod()
             {
                 slaming = true;
+                SpawnEffect(SlamEffect, characterBody.footPosition, false, Quaternion.identity, OneVector(radius));
                 if (NetworkServer.active)
                 {
-                    Collider[] collidersArray = Physics.OverlapSphere(transform.position, 24f, LayerIndex.entityPrecise.mask, QueryTriggerInteraction.UseGlobal);
+                    Collider[] collidersArray = Physics.OverlapSphere(transform.position, radius, LayerIndex.entityPrecise.mask, QueryTriggerInteraction.UseGlobal);
                     List<CharacterBody> bodies = new List<CharacterBody>();
                     foreach (Collider collider in collidersArray)
                     {
@@ -4578,9 +5238,8 @@ namespace Demolisher
                     {
                         if (body.characterMotor)
                         {
-                            KinematicCharacterMotor kinematicCharacterMotor2 = body.GetComponent<KinematicCharacterMotor>();
-                            if (kinematicCharacterMotor2)
-                                kinematicCharacterMotor2.ForceUnground(0f);
+                            if (body.characterMotor.Motor)
+                                body.characterMotor.Motor.ForceUnground(0f);
                             body.characterMotor.velocity.y = height + 5f;
                         }
                         else if (body.rigidbody)
@@ -4589,7 +5248,7 @@ namespace Demolisher
                             rigidbody.y = height + 5f;
                         }
 
-                        body.AddTimedBuff(SlamClutch, 10f);
+                        body.AddBuff(AfterSlam);
                     }
                 }
                 
