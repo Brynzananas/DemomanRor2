@@ -17,6 +17,9 @@
 		<Reference Include="TheTimesweeper-LoadoutSkillTitles">
 			<HintPath>D:\r2modman\RiskOfRain2\profiles\my_mod\BepInEx\plugins\TheTimesweeper-LoadoutSkillTitles\LoadoutSkillTitles.dll</HintPath>
 		</Reference>
+		<Reference Include="Brynzananas-BodyModelAdditionsAPI">
+			<HintPath>D:\r2modman\RiskOfRain2\profiles\my_mod\BepInEx\plugins\BrynzaSkinsAPI\Debug\netstandard2.1\BodyModelAdditionsAPI.dll</HintPath>
+		</Reference>
 	</ItemGroup>
 
 </Project>
