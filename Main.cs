@@ -1501,6 +1501,8 @@ namespace Demolisher
             public GameObject swordObject;
             public GameObject shieldObject;
             public CrosshairController.SpritePosition[] spritePositions;
+            private bool isUtilitydown = false;
+            private bool wasUtilitydown = false;
             public int stickyCount
             {
                 get
@@ -1604,65 +1606,6 @@ namespace Demolisher
             {
             }
 
-            public void Start()
-            {
-                SetSkillsModels();
-            }
-            public void SetSkillsModels()
-            {
-                /*
-                if (skillLocator && characterModel)
-                {
-                    List<GameObject> list = new List<GameObject>();
-                    foreach (var skill in skillLocator.allSkills)
-                    {
-                        if (swordDictionary.ContainsKey(skill.baseSkill))
-                        {
-                            GameObject swordModel = swordDictionary[skill.baseSkill].swordSkin.skillsToSkins[SkinCatalog.GetBodySkinDef(bodyIndexFromSurvivorIndex, (int)loadout.bodyLoadoutManager.GetSkinIndex(bodyIndexFromSurvivorIndex))];
-                            Transform weaponTransform = childLocator.FindChild("WeaponR");
-                            if (swordModel && weaponTransform)
-                            {
-                                swordObject = Instantiate(swordModel, weaponTransform);
-                                swordObject.transform.localEulerAngles = new Vector3(0f, 180f, 0f);
-                                list.Add(swordObject);
-
-                            }
-                        }
-                        if (shieldDictionary.ContainsKey(skill.baseSkill))
-                        {
-                            GameObject shieldModel = shieldDictionary[skill.baseSkill];
-                            Transform shieldTransform = childLocator.FindChild("Shield");
-                            if (shieldModel && shieldTransform)
-                            {
-                                shieldObject = Instantiate(shieldModel, shieldTransform);
-                                list.Add(shieldObject);
-
-                            }
-                        }
-                    }
-                    List<CharacterModel.RendererInfo> rendererInfos = characterModel.baseRendererInfos.ToList();
-                    foreach (GameObject weaponModel in list)
-                    {
-                        Renderer[] newRenderers = weaponModel.GetComponentsInChildren<Renderer>();
-                        foreach (Renderer renderer in newRenderers)
-                        {
-
-                            rendererInfos.Add(new CharacterModel.RendererInfo
-                            {
-                                defaultMaterial = renderer.material,
-                                defaultShadowCastingMode = renderer.shadowCastingMode,
-                                hideOnDeath = false,
-                                ignoreOverlays = false,
-                                renderer = renderer
-                            });
-
-
-                        }
-                    }
-                    characterModel.baseRendererInfos = rendererInfos.ToArray();
-                }*/
-
-            }
             public void UpdateHudObject()
             {
                 if (hudObject)
@@ -1853,23 +1796,29 @@ namespace Demolisher
             {
                 get
                 {
-                    return !inputBank.skill3.down && inputBank.skill3.wasDown;
+                    return !isUtilitydown && wasUtilitydown;
                 }
             }
-
-            // Token: 0x1700042A RID: 1066
-            // (get) Token: 0x060032EB RID: 13035 RVA: 0x00024D84 File Offset: 0x00022F84
             public bool justPressed
             {
                 get
                 {
-                    return inputBank.skill3.down && !inputBank.skill3.wasDown;
+                    return isUtilitydown && !wasUtilitydown;
                 }
             }
             public void Update()
             {
                 if (inputBank && skillLocator)
                 {
+                    wasUtilitydown = isUtilitydown;
+                    if (inputBank.skill3.down)
+                    {
+                        isUtilitydown = true;
+                    }
+                    else
+                    {
+                        isUtilitydown = false;
+                    }
                     if (justPressed)
                     {
                         bool switchOff = false;
@@ -2414,14 +2363,20 @@ namespace Demolisher
             private StickyComponent stickyComponent;
             public Dictionary<Collider, CharacterBody> keyValuePairs = new Dictionary<Collider, CharacterBody>();
             public bool detected = false;
+            private float stopwatch = 0.2f;
             public void Start()
             {
                 stickyComponent = transform.parent.GetComponent<StickyComponent>();
 
                 teamFilter = stickyComponent.GetComponent<TeamFilter>();
             }
+            public void FixedUpdate()
+            {
+                if(stopwatch > 0 ) stopwatch -= Time.fixedDeltaTime;
+            }
             public void OnTriggerStay(Collider other)
             {
+                if (stopwatch > 0) return;
                 if (!detected && stickyComponent.isFullyArmed)
                 {
                     CharacterBody characterBody = null;
