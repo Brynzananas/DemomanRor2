@@ -49,7 +49,7 @@ namespace Demolisher
     {
         public const string ModGuid = "com.brynzananas.demolisher";
         public const string ModName = "Demolisher";
-        public const string ModVer = "1.0.2";
+        public const string ModVer = "1.0.3";
 
         private static bool emotesEnabled;
         public static PluginInfo PInfo { get; private set; }
