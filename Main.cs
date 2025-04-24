@@ -110,12 +110,21 @@ namespace Demolisher
             On.RoR2.Run.OnDisable += Run_OnDisable;
             On.EntityStates.GenericCharacterMain.CanExecuteSkill += GenericCharacterMain_CanExecuteSkill;
             On.EntityStates.GenericCharacterMain.HandleMovements += GenericCharacterMain_HandleMovements;
+            On.RoR2.MapZone.TryZoneStart += MapZone_TryZoneStart; ;
             ContentManager.collectContentPackProviders += (addContentPackProvider) =>
             {
                 addContentPackProvider(new ContentPacks());
             };
 
         }
+
+        private void MapZone_TryZoneStart(On.RoR2.MapZone.orig_TryZoneStart orig, MapZone self, Collider other)
+        {
+            CharacterBody component = other.GetComponent<CharacterBody>();
+            if (component && component.HasBuff(AfterSlam) && other.transform.position.y > self.transform.position.y) return;
+            orig(self, other);
+        }
+
         public delegate void CodeAfterInstantiating(GameObject gameObject, ChildLocator childLocator, SkillLocator skillLocator, DemoComponent demoComponent);
         private void GenericCharacterMain_HandleMovements(On.EntityStates.GenericCharacterMain.orig_HandleMovements orig, GenericCharacterMain self)
         {
@@ -684,8 +693,10 @@ namespace Demolisher
                 {
                     projectile.AddComponent<DemoExplosionComponent>();
                 }
-                PrefabAPI.RegisterNetworkPrefab(projectile);
-                
+                ProjectileController projectileController = projectile.GetComponent<ProjectileController>();
+                projectileController.allowPrediction = false;
+                ContentPacks.networkPrefabs.Add(projectile);
+                //PrefabAPI.RegisterNetworkPrefab(projectile);
                 ContentPacks.projectiles.Add(projectile);
                 //ContentAddition.AddProjectile(projectile);
             }
@@ -1049,12 +1060,23 @@ namespace Demolisher
             private TeamIndex teamIndex;
             private GameObject explosionCentre;
             private GameObject owner;
+            private Rigidbody rigidbody;
+            private ProjectileController projectileController;
+            private CharacterBody ownerBody;
 
             public void Start()
             {
+                projectileController = GetComponent<ProjectileController>();
+                owner = projectileController ? projectileController.owner : null;
                 explosion = GetComponent<ProjectileExplosion>();
                 if (!explosion) Destroy(this);
                 teamFilter = GetComponent<TeamFilter>();
+                rigidbody = GetComponent<Rigidbody>();
+                ownerBody = owner ? owner.GetComponent<CharacterBody>() : null;
+                if (ownerBody && ownerBody.HasBuff(AfterSlam))
+                {
+                    rigidbody.velocity += ownerBody.characterMotor ? ownerBody.characterMotor.velocity : ownerBody.rigidbody.velocity;
+                }
                 //explosionCentre = new GameObject("ExplosionCentre");saasdwasdwasd
                 //explosionCentre.transform.position = explosionPosition;
                 //var collider = explosionCentre.AddComponent<SphereCollider>();
@@ -1079,9 +1101,7 @@ namespace Demolisher
                 explosionPosition = transform.position;
                 radius = explosion.blastRadius * 1.35f;
                 teamIndex = teamFilter ? teamFilter.teamIndex : TeamIndex.None;
-                ProjectileController projectileController = GetComponent<ProjectileController>();
-                owner = projectileController ? projectileController.owner : null;
-
+                
                 //explosionCentre.transform.SetParent(null, true);
             }
             public void OnDestroy()
@@ -1269,8 +1289,6 @@ namespace Demolisher
                 }
                 characterMotor = owner ? owner.GetComponent<CharacterMotor>() : null;
                 inputBankTest = owner ? owner.GetComponent<InputBankTest>() : null;
-
-                //stateType = seekerState.stateType;
                 if (skillLocator)
                 {
                     foreach (var stateMachine in skillLocator.allSkills)
@@ -2974,7 +2992,7 @@ namespace Demolisher
         }
         public static SkillDef GrenadeLauncherInit(Type state, Sprite sprite, string name, string nameToken, string descToken, string[] keyWordTokens, bool isSticky = false, int baseStocks = 4, float rechargeInterval = 4f, int requiredStock = 1, int rechargeStock = 1, int stockToConsume = 1)
         {
-            SkillDef skillDef = GrenadeLauncherInit<SkillDef>(state, sprite, name, nameToken, descToken, keyWordTokens, isSticky, baseStocks, rechargeInterval, requiredStock, stockToConsume);
+            SkillDef skillDef = GrenadeLauncherInit<SkillDef>(state, sprite, name, nameToken, descToken, keyWordTokens, isSticky, baseStocks, rechargeInterval, requiredStock, rechargeStock, stockToConsume);
             return skillDef;
         }
         public static T GrenadeLauncherInit<T>(Type state, Sprite sprite, string name, string nameToken, string descToken, string[] keyWordTokens, bool isSticky = false, int baseStocks = 4, float rechargeInterval = 4f, int requiredStock = 1, int rechargeStock = 1, int stockToConsume = 1) where T : SkillDef
@@ -5597,6 +5615,7 @@ namespace Demolisher
         public static List<SkillDef> skills = new List<SkillDef>();
         public static List<SkillFamily> skillFamilies = new List<SkillFamily>();
         public static List<GameObject> projectiles = new List<GameObject>();
+        public static List<GameObject> networkPrefabs = new List<GameObject>();
         public static List<SurvivorDef> survivors = new List<SurvivorDef>();
         public static List<Type> states = new List<Type>();
         public static List<NetworkSoundEventDef> sounds = new List<NetworkSoundEventDef>();
@@ -5624,6 +5643,7 @@ namespace Demolisher
             contentPack.survivorDefs.Add(survivors.ToArray());
             contentPack.entityStateTypes.Add(states.ToArray());
             contentPack.networkSoundEventDefs.Add(sounds.ToArray());
+            contentPack.networkedObjectPrefabs.Add(networkPrefabs.ToArray());
             yield break;
         }
     }
