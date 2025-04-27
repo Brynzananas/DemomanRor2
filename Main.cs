@@ -30,6 +30,10 @@ using Random = UnityEngine.Random;
 using JetBrains.Annotations;
 using BodyModelAdditionsAPI;
 using static BodyModelAdditionsAPI.Main;
+using R2API.Networking.Interfaces;
+using R2API.Networking;
+using HG;
+using static UnityEngine.SendMouseEvents;
 [assembly: SecurityPermission(SecurityAction.RequestMinimum, SkipVerification = true)]
 [assembly: HG.Reflection.SearchableAttribute.OptIn]
 [assembly: HG.Reflection.SearchableAttribute.OptInAttribute]
@@ -49,16 +53,16 @@ namespace Demolisher
     {
         public const string ModGuid = "com.brynzananas.demolisher";
         public const string ModName = "Demolisher";
-        public const string ModVer = "1.0.3";
+        public const string ModVer = "1.0.4";
 
         private static bool emotesEnabled;
         public static PluginInfo PInfo { get; private set; }
         public static AssetBundle ThunderkitAssets;
-        public static BepInEx.Logging.ManualLogSource ModLogger;
         public static Dictionary<string, UnityEngine.Object> assetsDictionary = new Dictionary<string, UnityEngine.Object>();
         public static Dictionary<string, string> tokenReplace = new Dictionary<string, string>();
         public static List<BuffDef> buffsToTrack = new List<BuffDef>();
-        public static List<GenericSkill> skillsSkins = new List<GenericSkill>();
+        public static Dictionary<int, GameObject> idToEffect = new Dictionary<int, GameObject>();
+        public static Dictionary<GameObject, int> effectToId = new Dictionary<GameObject, int>();
         public static SurvivorDef DemoSurvivorDef;
         public static SkinDef DemoDefaultSkin;
         public void Awake()
@@ -89,6 +93,7 @@ namespace Demolisher
                 //ContentAddition.AddSkillFamily(skillFamily);
             }
             emotesEnabled = BepInEx.Bootstrap.Chainloader.PluginInfos.ContainsKey(EmoteCompatAbility.customEmotesApiGUID);
+            CreateINetMessages();
             CreateAssets();
             CreateSurvivor();
             CreateSounds();
@@ -110,7 +115,7 @@ namespace Demolisher
             On.RoR2.Run.OnDisable += Run_OnDisable;
             On.EntityStates.GenericCharacterMain.CanExecuteSkill += GenericCharacterMain_CanExecuteSkill;
             On.EntityStates.GenericCharacterMain.HandleMovements += GenericCharacterMain_HandleMovements;
-            On.RoR2.MapZone.TryZoneStart += MapZone_TryZoneStart; ;
+            On.RoR2.MapZone.TryZoneStart += MapZone_TryZoneStart;
             ContentManager.collectContentPackProviders += (addContentPackProvider) =>
             {
                 addContentPackProvider(new ContentPacks());
@@ -118,11 +123,323 @@ namespace Demolisher
 
         }
 
+        private void CreateINetMessages()
+        {
+            NetworkingAPI.RegisterMessageType<HookNetMessage>();
+            NetworkingAPI.RegisterMessageType<SwordEffectNetMessage>();
+            NetworkingAPI.RegisterMessageType<AddBuffNetMessage>();
+            NetworkingAPI.RegisterMessageType<AddBodyEffectNetMessage>();
+            NetworkingAPI.RegisterMessageType<RemoveBodyEffectNetMessage>();
+            NetworkingAPI.RegisterMessageType<ModifyBooleanOfComponentNetMessage>();
+            NetworkingAPI.RegisterMessageType<RemoveComponentFromNetworkObjectNetMessage>();
+        }
+        public class RemoveBodyEffectNetMessage : INetMessage
+        {
+            NetworkInstanceId instanceId;
+            string effectName;
+            string bone;
+            public void Deserialize(NetworkReader reader)
+            {
+                instanceId = reader.ReadNetworkId();
+                effectName = reader.ReadString();
+                bone = reader.ReadString();
+            }
+            public RemoveBodyEffectNetMessage(NetworkInstanceId networkInstanceId, string effectName, string bone)
+            {
+                instanceId = networkInstanceId;
+                this.effectName = effectName;
+                this.bone = bone;
+            }
+            public RemoveBodyEffectNetMessage()
+            {
+
+            }
+            public void OnReceived()
+            {
+                GameObject characterObject = Util.FindNetworkObject(instanceId);
+                if (!characterObject) return;
+                CharacterBody characterBody = characterObject.GetComponent<CharacterBody>();
+                if(characterBody == null) return;
+                Transform modelTransform = characterBody.modelLocator.modelTransform;
+                ChildLocator childLocator = modelTransform ? modelTransform.GetComponent<ChildLocator>() : null;
+                if(childLocator == null) return;
+                if (bone != null && bone != "" && childLocator && childLocator.FindChild(bone))
+                {
+                    do
+                    {
+                        GameObject gameObject = childLocator.FindChild(bone).Find(effectName).gameObject;
+                        gameObject.name = "gone";
+                        StopAndDestroyVFX(gameObject, 1f);
+                    } while (childLocator.FindChild(bone).Find(effectName));
+                }
+                else
+                {
+                    do
+                    {
+                        GameObject gameObject = modelTransform.Find(effectName).gameObject;
+                        gameObject.name = "gone";
+                        StopAndDestroyVFX(gameObject, 1f);
+                    } while (modelTransform.Find(effectName));
+                }
+            }
+
+            public void Serialize(NetworkWriter writer)
+            {
+                writer.Write(instanceId);
+                writer.Write(effectName);
+                writer.Write(bone);
+            }
+        }
+        public class RemoveComponentFromNetworkObjectNetMessage : INetMessage
+        {
+            NetworkInstanceId instanceId;
+            string componentName;
+            public RemoveComponentFromNetworkObjectNetMessage(NetworkInstanceId networkInstanceId, string componentName)
+            {
+                instanceId = networkInstanceId;
+                this.componentName = componentName;
+            }
+            public RemoveComponentFromNetworkObjectNetMessage()
+            {
+
+            }
+            public void Deserialize(NetworkReader reader)
+            {
+                instanceId = reader.ReadNetworkId();
+                componentName = reader.ReadString();
+            }
+
+            public void OnReceived()
+            {
+                GameObject gameObject = Util.FindNetworkObject(instanceId);
+                if (!gameObject) return;
+                Component component = gameObject.GetComponentByName(componentName);
+                if(component == null) return;
+                Destroy(component);
+            }
+
+            public void Serialize(NetworkWriter writer)
+            {
+                writer.Write(instanceId);
+                writer.Write(componentName);
+            }
+        }
+        public class ModifyBooleanOfComponentNetMessage : INetMessage
+        {
+            NetworkInstanceId instanceId;
+            string componentName;
+            string boolean;
+            bool value;
+            public ModifyBooleanOfComponentNetMessage(NetworkInstanceId networkInstanceId, string componentName, string boolean, bool value)
+            {
+                instanceId = networkInstanceId;
+                this.componentName = componentName;
+                this.boolean = boolean;
+                this.value = value;
+            }
+            public ModifyBooleanOfComponentNetMessage()
+            {
+
+            }
+            public void Deserialize(NetworkReader reader)
+            {
+                instanceId = reader.ReadNetworkId();
+                componentName= reader.ReadString();
+                boolean = reader.ReadString();
+                value = reader.ReadBoolean();
+            }
+
+            public void OnReceived()
+            {
+                GameObject gameObject = Util.FindNetworkObject(instanceId);
+                if(gameObject == null) return;
+                var component = (gameObject.GetComponent(componentName) as MonoBehaviour);
+                if(component == null) return;
+                component.SetFieldValue<bool>(boolean, value);
+            }
+
+            public void Serialize(NetworkWriter writer)
+            {
+                writer .Write(instanceId);
+                writer .Write(componentName);
+                writer.Write(boolean);
+                writer.Write(value);
+
+            }
+        }
+        public class AddBodyEffectNetMessage : INetMessage
+        {
+            NetworkInstanceId instanceId;
+            int effectId;
+            string effectName;
+            string bone;
+            Vector3 position;
+            Vector3 scale;
+            public AddBodyEffectNetMessage(NetworkInstanceId networkInstanceId, int effectId, string effectName, string bone, Vector3 position, Vector3 scale)
+            {
+                instanceId = networkInstanceId;
+                this.effectId = effectId;
+                this.effectName = effectName;
+                this.bone = bone;
+                this.position = position;
+                this.scale = scale;
+            }
+            public AddBodyEffectNetMessage()
+            {
+
+            }
+            public void Deserialize(NetworkReader reader)
+            {
+                instanceId = reader.ReadNetworkId();
+                effectId = reader.ReadInt32();
+                effectName = reader.ReadString();
+                bone = reader.ReadString();
+            }
+
+            public void OnReceived()
+            {
+                GameObject effectObject = idToEffect[effectId];
+                GameObject characterObject = Util.FindNetworkObject(instanceId);
+                if (!characterObject) return;
+                CharacterBody characterBody = characterObject.GetComponent<CharacterBody>();
+                if (characterBody == null) return;
+                Transform modelTransform = characterBody.modelLocator.modelTransform;
+                ChildLocator childLocator = modelTransform ? modelTransform.GetComponent<ChildLocator>() : null;
+                if (childLocator == null) return;
+                if (bone != null && bone != "" && childLocator && childLocator.FindChild(bone))
+                {
+                    SpawnEffect(effectObject, position, true, Quaternion.identity, scale, childLocator.FindChild(bone), effectName);
+                }
+                else
+                {
+                    SpawnEffect(effectObject, position, true, Quaternion.identity, scale, modelTransform, effectName);
+                }
+
+            }
+
+            public void Serialize(NetworkWriter writer)
+            {
+                writer.Write(instanceId);
+                writer.Write(effectId);
+                writer.Write(effectName);
+                writer.Write(bone);
+                writer.Write(position);
+                writer.Write(scale);
+            }
+        }
+        public class AddBuffNetMessage : INetMessage
+        {
+            NetworkInstanceId instanceId;
+            int buffIndex;
+            int amount;
+            float buffTime;
+            public AddBuffNetMessage(NetworkInstanceId networkInstanceId, int buffIndex, int amount, float buffTime)
+            {
+                this.instanceId = networkInstanceId;
+                this.buffIndex = buffIndex;
+                this.amount = amount;
+                this.buffTime = buffTime;
+            }
+            public AddBuffNetMessage(NetworkInstanceId networkInstanceId, BuffIndex buffIndex, int amount, float buffTime)
+            {
+                this.instanceId = networkInstanceId;
+                this.buffIndex = (int)buffIndex;
+                this.amount = amount;
+                this.buffTime = buffTime;
+            }
+            public AddBuffNetMessage(NetworkInstanceId networkInstanceId, BuffDef buffDef, int amount, float buffTime)
+            {
+                this.instanceId = networkInstanceId;
+                this.buffIndex = (int)buffDef.buffIndex;
+                this.amount = amount;
+                this.buffTime = buffTime;
+            }
+            public AddBuffNetMessage()
+            {
+
+            }
+            public void Deserialize(NetworkReader reader)
+            {
+                instanceId = reader.ReadNetworkId();
+                buffIndex = reader.ReadInt32();
+                amount = reader.ReadInt32();
+                buffTime = reader.ReadSingle();
+            }
+
+            public void OnReceived()
+            {
+                if (!NetworkServer.active) return;
+                GameObject gameObject = Util.FindNetworkObject(instanceId);
+                if (gameObject == null) return;
+                CharacterBody characterBody = gameObject.GetComponent<CharacterBody>();
+                if (characterBody == null) return;
+                for (int i = 0; i < amount; i++)
+                {
+                    if (amount < 0)
+                    {
+                        characterBody.RemoveBuff((BuffIndex)buffIndex);
+                    }
+                    else
+                    {
+                        if (buffTime > 0)
+                        {
+                            characterBody.AddTimedBuff((BuffIndex)buffIndex, buffTime);
+                        }
+                        else
+                        {
+                            characterBody.AddBuff((BuffIndex)buffIndex);
+                        }
+                    }
+                }
+
+            }
+
+            public void Serialize(NetworkWriter writer)
+            {
+                writer.Write(instanceId);
+                writer.Write(buffIndex);
+                writer.Write(amount);
+                writer.Write(buffTime);
+            }
+        }
         private void MapZone_TryZoneStart(On.RoR2.MapZone.orig_TryZoneStart orig, MapZone self, Collider other)
         {
             CharacterBody component = other.GetComponent<CharacterBody>();
-            if (component && component.HasBuff(AfterSlam) && other.transform.position.y > self.transform.position.y) return;
+            if (component && component.HasBuff(AfterSlam) && other.transform.position.y > self.transform.position.y)
+            {
+                AboveMapZoneTracker aboveMapZoneTracker = other.gameObject.AddComponent<AboveMapZoneTracker>();
+                aboveMapZoneTracker.characterBody = component;
+                return;
+            }
+            
             orig(self, other);
+        }
+        public class AboveMapZoneTracker : MonoBehaviour
+        {
+            public CharacterBody characterBody;
+
+            public void Start()
+            {
+                if (!characterBody) characterBody = GetComponent<CharacterBody>();
+            }
+            public void FixedUpdate()
+            {
+                RaycastHit[] raycastHits = Physics.RaycastAll(transform.position, Physics.gravity, 9999f, LayerIndex.collideWithCharacterHullOnly.intVal, QueryTriggerInteraction.UseGlobal);
+                if (raycastHits != null && raycastHits.Length > 0)
+                {
+                    foreach (RaycastHit raycastHit in raycastHits)
+                    {
+                        MapZone zone = raycastHit.collider.GetComponent<MapZone>();
+                        if (zone)
+                        {
+                            characterBody.SetBuffCount(AfterSlam.buffIndex, 0);
+                            zone.TryZoneStart(characterBody.GetComponent<Collider>());
+                            break;
+                        }
+                        
+                    }
+                }
+            }
         }
 
         public delegate void CodeAfterInstantiating(GameObject gameObject, ChildLocator childLocator, SkillLocator skillLocator, DemoComponent demoComponent);
@@ -356,90 +673,49 @@ namespace Demolisher
             }
             Destroy(gameObject, timeToDestroy);
         }
+        public static void AddEffect(GameObject gameObject)
+        {
+            int id = idToEffect.Count;
+            idToEffect.Add(id, gameObject);
+            effectToId.Add(gameObject, id);
+        }
         private void CharacterBody_OnBuffFinalStackLost(On.RoR2.CharacterBody.orig_OnBuffFinalStackLost orig, CharacterBody self, BuffDef buffDef)
         {
             orig(self, buffDef);
+            if (!NetworkServer.active) return;
             if (buffsToTrack.Contains(buffDef))
             {
                 runDemoInstance.RemoveBuffBody(buffDef, self);
             }
             if (buffDef == AfterSlam)
             {
-                if (self.transform.Find("SMAAASH"))
-                {
-                    do
-                    {
-                        StopAndDestroyVFX(self.transform.Find("SMAAASH"), 1f);
-                    } while (self.transform.Find("SMAAASH"));
-                }
-                if (self.characterMotor) self.characterMotor.disableAirControlUntilCollision = false;
                 self.SetBuffCount(DisableInputs.buffIndex, 0);
+                new RemoveBodyEffectNetMessage(self.netId, "SMAAASH", "").Send(NetworkDestination.Clients);
+                new RemoveComponentFromNetworkObjectNetMessage(self.netId, "AboveMapZoneTracker").Send(NetworkDestination.Clients);
             }
             if (buffDef == VelocityPreserve)
             {
-                Transform modelTransform = self.modelLocator.modelTransform;
-                ChildLocator childLocator = modelTransform ? modelTransform.GetComponent<ChildLocator>() : null;
-                if (childLocator)
-                {
-                    Transform footR = childLocator.FindChild("FootR");
-                    Transform footL = childLocator.FindChild("FootL");
-
-                    if (footR && footR.Find("DemoSmokeFeet"))
-                    {
-                        do
-                        {
-                            GameObject smoking = footR.Find("DemoSmokeFeet").gameObject;
-                            StopAndDestroyVFX(smoking, 1f);
-                        } while (footR.Find("DemoSmokeFeet"));
-
-                    }
-                    if (footL && footL.Find("DemoSmokeFeet"))
-                    {
-                        do
-                        {
-                            GameObject smoking = footL.Find("DemoSmokeFeet").gameObject;
-                            StopAndDestroyVFX(smoking, 1f);
-                        } while (footL.Find("DemoSmokeFeet"));
-                    }
-                }
-                if (self.characterMotor) self.characterMotor.disableAirControlUntilCollision = false;
+                new RemoveBodyEffectNetMessage(self.netId, "DemoSmokeFeet", "FootR").Send(NetworkDestination.Clients);
+                new RemoveBodyEffectNetMessage(self.netId, "DemoSmokeFeet", "FootL").Send(NetworkDestination.Clients);
+                new ModifyBooleanOfComponentNetMessage(self.netId, "CharacterMotor", "disableAirControlUntilCollision", false).Send(NetworkDestination.Clients);
             }
         }
         private void CharacterBody_OnBuffFirstStackGained(On.RoR2.CharacterBody.orig_OnBuffFirstStackGained orig, CharacterBody self, BuffDef buffDef)
         {
             orig(self, buffDef);
+            if (!NetworkServer.active) return;
             if (buffsToTrack.Contains(buffDef))
             {
                 runDemoInstance.AddBuffBody(buffDef, self);
             }
             if (buffDef == AfterSlam)
             {
-                if (!self.transform.Find("SMAAASH"))
-                {
-                    SpawnEffect(SlamableEffect, self.corePosition, false, Quaternion.identity, OneVector(self.radius * 0.7f), self.transform, "SMAAASH");
-                }
+                new AddBodyEffectNetMessage(self.netId, effectToId[SlamableEffect], "SMAAASH", "", Vector3.zero, OneVector(self.radius * 0.7f)).Send(NetworkDestination.Clients);
             }
             if (buffDef == VelocityPreserve)
             {
-                Transform modelTransform = self.modelLocator.modelTransform;
-                ChildLocator childLocator = modelTransform ? modelTransform.GetComponent<ChildLocator>() : null;
-                if (childLocator)
-                {
-                    Transform footR = childLocator.FindChild("FootR");
-                    Transform footL = childLocator.FindChild("FootL");
-                    if (footR && !footR.Find("DemoSmokeFeet"))
-                    {
-                        GameObject smoking = Instantiate(SmokeEffect, footR);
-                        smoking.transform.rotation = Quaternion.identity;
-                        smoking.name = "DemoSmokeFeet";
-                    }
-                    if (footL && !footL.Find("DemoSmokeFeet"))
-                    {
-                        GameObject smoking = Instantiate(SmokeEffect, footL);
-                        smoking.transform.rotation = Quaternion.identity;
-                        smoking.name = "DemoSmokeFeet";
-                    }
-                }
+                new AddBodyEffectNetMessage(self.netId, effectToId[SmokeEffect], "DemoSmokeFeet", "FootR", Vector3.zero, OneVector(1f)).Send(NetworkDestination.Clients);
+                new AddBodyEffectNetMessage(self.netId, effectToId[SmokeEffect], "DemoSmokeFeet", "FootL", Vector3.zero, OneVector(1f)).Send(NetworkDestination.Clients);
             }
         }
 
@@ -547,7 +823,7 @@ namespace Demolisher
         public static GameObject NukeProjectile;
         public static GameObject JumperProjectile;
         public static GameObject HookProjectile;
-        
+
         public static GameObject DemoBody;
         public static GameObject SmokeEffect;
         public static GameObject SwingEffect;
@@ -610,6 +886,7 @@ namespace Demolisher
             buffsToTrack.Add(AfterSlam);
             SmokeEffect = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/SmokingEffect.prefab");
             SmokeEffect.AddComponent<DontRotate>();
+            AddEffect(SmokeEffect);
             SwordIndicator = ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/UI/DemoSwordIndicatorThinHalf.png");
             StickyIndicator = ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/UI/DemoStickyIndicatorThinHalf.png");
             DetonateIndicator = ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/UI/DemoDetonateIndicatorThin.png");
@@ -623,8 +900,10 @@ namespace Demolisher
             Tracer = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/DemoTracer.prefab");
             SpinEffect = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/SpecialSwingNoTrigger.prefab");
             SlamableEffect = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/SlammableVFX.prefab");
+            AddEffect(SlamableEffect);
             SlamableEffect.AddComponent<DontRotate>();
             SlamEffect = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/SlamVFX.prefab");
+            AddEffect(SlamEffect);
             HitEffect = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/HitVFX.prefab");
             //UpgradeItem = AddItem("DemoStompItem", ItemTier.NoTier, null, null, false, true, new ItemTag[] {ItemTag.WorldUnique}, null);
             List<GameObject> projectiles = new List<GameObject>();
@@ -1003,11 +1282,36 @@ namespace Demolisher
             }
         }
         public static BulletAttack.HitCallback effectHitCallback = new Main().EffectOnHit;
+        public class SwordEffectNetMessage : INetMessage
+        {
+            Vector3 position;
+            public SwordEffectNetMessage(Vector3 position)
+            {
+                this.position = position;
+            }
+            public SwordEffectNetMessage()
+            {
+            }
+            public void Deserialize(NetworkReader reader)
+            {
+                position = reader.ReadVector3();
+            }
+
+            public void OnReceived()
+            {
+                SpawnEffect(HitEffect, position, false, Quaternion.identity, OneVector(0.6f));
+            }
+
+            public void Serialize(NetworkWriter writer)
+            {
+                writer.Write(position);
+            }
+        }
         public bool EffectOnHit(BulletAttack bulletAttack, ref BulletAttack.BulletHit hitInfo)
         {
             if (hitInfo.hitHurtBox)
             {
-                SpawnEffect(HitEffect, hitInfo.point, false, Quaternion.identity, OneVector(0.6f));
+                new SwordEffectNetMessage(hitInfo.point).Send(NetworkDestination.Clients);
             }
             return false;
         }
@@ -1244,7 +1548,73 @@ namespace Demolisher
                 }
             }
         }
-        public class HookComponent : MonoBehaviour
+
+        public class HookNetMessage : INetMessage
+        {
+            public HookNetMessage()
+            {
+
+            }
+            public HookNetMessage(NetworkInstanceId networkInstanceId, bool sticked, bool stickedToBody, float speed, float dist, NetworkInstanceId networkInstanceId1)
+            {
+                hookObject = networkInstanceId;
+                this.sticked = sticked;
+                this.stickedToBody = stickedToBody;
+                this.speed = speed;
+                this.dist = dist;
+                stickedBody = networkInstanceId1;
+            }
+            NetworkInstanceId hookObject;
+            bool sticked;
+            bool stickedToBody;
+            float speed;
+            float dist;
+            NetworkInstanceId stickedBody;
+            public void Deserialize(NetworkReader reader)
+            {
+                hookObject = reader.ReadNetworkId();
+                sticked = reader.ReadBoolean();
+                stickedToBody = reader.ReadBoolean();
+                speed = reader.ReadSingle();
+                dist = reader.ReadSingle();
+                stickedBody = reader.ReadNetworkId();
+            }
+
+            public void OnReceived()
+            {
+                if (NetworkServer.active)
+                {
+                    return;
+                }
+                GameObject gameObject = Util.FindNetworkObject(hookObject);
+                if (!gameObject)
+                {
+                    return;
+                }
+                HookComponent hookComponent = gameObject.GetComponent<HookComponent>();
+                if (!hookComponent) return;
+                hookComponent.sticked = sticked;
+                hookComponent.isStickedAnEnemy = stickedToBody;
+                hookComponent.speed = speed;
+                hookComponent.dist = dist;
+                GameObject gameObject1 = Util.FindNetworkObject(stickedBody);
+                if (!gameObject1) return;
+                CharacterBody characterBody = gameObject1.GetComponent<CharacterBody>();
+                if (!characterBody) return;
+                hookComponent.stickedBody = characterBody;
+            }
+
+            public void Serialize(NetworkWriter writer)
+            {
+                writer.Write(hookObject);
+                writer.Write(sticked);
+                writer.Write(stickedToBody);
+                writer.Write(speed);
+                writer.Write(dist);
+                writer.Write(stickedBody);
+            }
+        }
+        public class HookComponent : NetworkBehaviour
         {
             private EntityStateMachine currentStateMachine;
             public SerializableEntityStateType seekerState;
@@ -1257,15 +1627,16 @@ namespace Demolisher
             private InputBankTest inputBankTest;
             public bool sticked = false;
             private Vector3 previousAimDirection = Vector3.zero;
-            private bool isStickedAnEnemy = false;
-            private CharacterBody stickedBody;
+            public bool isStickedAnEnemy = false;
+            public CharacterBody stickedBody;
             //private float hookLength;
             //private Vector3 hookAimDirection;
             private GameObject hookedRotator;
             private GameObject hookedObject;
             private SkillLocator skillLocator;
+            public float dist = 0f;
             //private float maxDistance = 32f;
-            private float speed = 24f;
+            public float speed = 24f;
             public void Start()
             {
                 foreach (Transform child in transform)
@@ -1311,6 +1682,16 @@ namespace Demolisher
                 }
 
             }
+            //public virtual void OnDeserialize(NetworkReader reader)
+            //{
+            //    sticked = reader.ReadBoolean();
+            //    isStickedAnEnemy = reader.ReadBoolean();    
+            //}
+            //public virtual void OnSerialize(NetworkWriter writer)
+            //{
+            //    writer.Write(sticked);
+            //    writer.Write(isStickedAnEnemy);
+            //}
             public void FixedUpdate()
             {
                 if (currentStateMachine && currentStateMachine.state.GetType() == seekerState.stateType)
@@ -1320,22 +1701,24 @@ namespace Demolisher
                         Vector3 aimDirection = inputBankTest ? inputBankTest.aimDirection : Vector3.zero;
                         Vector3 aimDelta = inputBankTest.aimDirection - previousAimDirection;
                         previousAimDirection = aimDirection;
-                        if (isStickedAnEnemy && hookedObject && stickedBody && !stickedBody.isChampion)
+                        if (isStickedAnEnemy && inputBankTest && stickedBody && !stickedBody.isChampion)
                         {
+                            Vector3 direction = (inputBankTest.aimOrigin + (inputBankTest.aimDirection * dist)) - stickedBody.transform.position;
                             if (stickedBody.characterMotor)
                             {
-                                Vector3 direction = hookedObject.transform.position - stickedBody.transform.position;
+                                //Vector3 direction = hookedObject.transform.position - stickedBody.transform.position;
+                                
                                 stickedBody.characterMotor.velocity = direction * 4;
                             }
                             else if (stickedBody.rigidbody)
                             {
-                                Vector3 direction = hookedObject.transform.position - stickedBody.transform.position;
+                                //Vector3 direction = hookedObject.transform.position - stickedBody.transform.position;
                                 stickedBody.rigidbody.velocity = direction * 4;
                             }
                         }
                         else
                         {
-                            if (characterMotor && inputBankTest)
+                            if (!isStickedAnEnemy && characterMotor)
                             {
                                 //Vector3 vector = hookedObject.transform.position - inputBankTest.aimOrigin;
                                 //float disance = vector.magnitude;
@@ -1401,7 +1784,7 @@ namespace Demolisher
                 //hookLength = hookAimDirection.magnitude;
                 //hookAimDirection = hookAimDirection.normalized;
                 previousAimDirection = inputBankTest ? inputBankTest.aimDirection : Vector3.zero;
-
+                dist = (transform.position - characterMotor.body.aimOrigin).magnitude;
                 sticked = true;
                 stickedBody = collision.collider.GetComponent<HurtBox>()?.healthComponent?.body;
                 if (stickedBody)
@@ -1421,24 +1804,24 @@ namespace Demolisher
                 {
                     speed = Math.Max(characterMotor.walkSpeed, characterMotor.velocity.magnitude * 3f);
                     if (speed > characterMotor.walkSpeed * 6f) speed = characterMotor.walkSpeed * 6f;
-                    if (inputBankTest)
-                    {
-                        hookedRotator = new GameObject("hookedRotator");
-                        hookedRotator.transform.SetParent(characterMotor.body.aimOriginTransform, false);
-                        hookedRotator.transform.rotation = Quaternion.LookRotation(inputBankTest.aimDirection);
-                        hookedObject = new GameObject("hookedPosition");
-                        GameObject gameObject = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-                        gameObject.layer = 9;
-                        gameObject.transform.SetParent(hookedObject.transform, false);
-                        hookedObject.transform.SetParent(hookedRotator.transform, false);
-                        float distance = MathF.Max(6, (collision.contacts[0].point - characterMotor.body.aimOriginTransform.position).magnitude);
-                        if (distance > 64) distance = 64;
-                        hookedObject.transform.position = hookedObject.transform.position + (inputBankTest.aimDirection * distance);
-                    }
+                    //if (inputBankTest)
+                    //{
+
+                    //    hookedRotator = new GameObject("hookedRotator");
+                    //    hookedRotator.transform.SetParent(characterMotor.body.aimOriginTransform, false);
+                    //    hookedRotator.transform.rotation = Quaternion.LookRotation(inputBankTest.aimDirection);
+                    //    hookedObject = new GameObject("hookedPosition");
+                    //    GameObject gameObject = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+                    //    gameObject.layer = 9;
+                    //    gameObject.transform.SetParent(hookedObject.transform, false);
+                    //    hookedObject.transform.SetParent(hookedRotator.transform, false);
+                    //    float distance = MathF.Max(6, (collision.contacts[0].point - characterMotor.body.aimOriginTransform.position).magnitude);
+                    //    if (distance > 64) distance = 64;
+                    //    hookedObject.transform.position = hookedObject.transform.position + (inputBankTest.aimDirection * distance);
+                    //}
 
                 }
-
-
+                new HookNetMessage(GetComponent<NetworkIdentity>().m_NetId, sticked, isStickedAnEnemy, speed, dist, isStickedAnEnemy ? stickedBody.netId : NetworkInstanceId.Zero).Send(NetworkDestination.Clients);
             }
         }
         public class DemoCharacterMain : GenericCharacterMain
@@ -3222,12 +3605,14 @@ namespace Demolisher
             states.Add(typeof(SpecialOneSwordSpiner));
             states.Add(typeof(SpecialOneRedirector));
             states.Add(typeof(BigAssSword));
+            states.Add(typeof(BigAssSwordFire));
             states.Add(typeof(BigAssSticky));
             states.Add(typeof(BigAssAttackRedirector));
             states.Add(typeof(UltraInstinctRedirector));
             states.Add(typeof(UltraInstinctSticky));
             states.Add(typeof(UltraInstinctSword));
             states.Add(typeof(Slam));
+            states.Add(typeof(Slamming));
             states.Add(typeof(ShieldChargeAntigravity));
             states.Add(typeof(ShieldChargeHeavy));
             states.Add(typeof(ShieldChargeLight));
@@ -4000,6 +4385,7 @@ namespace Demolisher
             }
             public override void OnEarlyChargeEnd()
             {
+                if (isAuthority)
                 outer.SetNextStateToMain();
             }
             public override void OnFullChargeEnd()
@@ -4600,6 +4986,25 @@ namespace Demolisher
                 base.OnFullRotation();
             }
         }
+        public abstract class BigAssAttackFire : BaseState
+        {
+            public float chargePercentage = 0f;
+            public override void OnSerialize(NetworkWriter writer)
+            {
+                base.OnSerialize(writer);
+                writer.Write((byte)chargePercentage);
+            }
+            public override void OnDeserialize(NetworkReader reader)
+            {
+                base.OnDeserialize(reader);
+                chargePercentage = (float)reader.ReadByte();
+            }
+            public override void OnEnter()
+            {
+                base.OnEnter();
+                outer.SetNextStateToMain();
+            }
+        }
         public abstract class BigAssAttack : BaseState
         {
             private int stage = 0;
@@ -4623,22 +5028,19 @@ namespace Demolisher
                 base.FixedUpdate();
                 if (stage == 0)
                 {
-                    if (inputBank && inputBank.skill4.down)
+                    OnHold();
+                    if (power < chargeCap)
                     {
-                        OnHold();
-                        if (power < chargeCap)
-                        {
-                            if (isAuthority)
-                                chargeImage.fillAmount = power / chargeCap;
-                            power += GetDeltaTime() * characterBody.attackSpeed;
-                        }
-                        else if (!isCharged)
-                        {
-                            isCharged = true;
-                            OnFullCharge();
-                        }
+                        if (isAuthority)
+                            chargeImage.fillAmount = power / chargeCap;
+                        power += GetDeltaTime() * characterBody.attackSpeed;
                     }
-                    else
+                    else if (!isCharged)
+                    {
+                        isCharged = true;
+                        OnFullCharge();
+                    }
+                    if (isAuthority && inputBank && !inputBank.skill4.down)
                     {
                         OnRelease();
                     }
@@ -4678,50 +5080,23 @@ namespace Demolisher
             }
             public virtual void OnRelease()
             {
-                outer.SetNextStateToMain();
             }
         }
-        public class BigAssSword : BigAssAttack
+        public class BigAssSwordFire : BigAssAttackFire
         {
-            public override float chargeCap => 3f;
             public DemoSwordClass swordClass;
-            public Transform swordTransform;
-            public Vector3 previousScale;
             public override void OnEnter()
             {
-                base.OnEnter();
                 swordClass = swordDictionary.ContainsKey(skillLocator.primary.skillDef) ? swordDictionary[skillLocator.primary.skillDef] : DefaultSword;
-                Transform modelTransform = GetComponent<ModelLocator>()?.modelTransform;
-                ChildLocator childLocator = modelTransform ? modelTransform.GetComponent<ChildLocator>() : null;
-                if (childLocator)
-                {
-                    swordTransform = childLocator.FindChild("WeaponR");
-                    if (swordTransform != null)
-                    {
-                        previousScale = swordTransform.localScale;
-                    }
-                }
-                PlayAnimation("Gesture, Override", "SwingUp", "Slash.playbackRate", swordClass.swingUpTime / base.attackSpeedStat, 0.2f);
-            }
-            public override void OnHold()
-            {
-                base.OnHold();
-                if (!isCharged && swordTransform)
-                {
-                    swordTransform.localScale = Vector3.MoveTowards(swordTransform.localScale, previousScale + new Vector3(chargeCap, chargeCap, chargeCap), GetDeltaTime());
-                }
-            }
-            public override void OnRelease()
-            {
                 BulletAttack swordAttack = swordClass.bulletAttack;
                 Vector3 center = inputBank ? inputBank.aimOrigin + characterDirection.forward * swordAttack.maxDistance : transform.position + characterDirection.forward * swordAttack.maxDistance;
-                if (isAuthority)
+                if (NetworkServer.active)
                 {
                     BulletAttack bulletAttack2 = new BulletAttack()
                     {
                         radius = swordAttack.maxDistance,
                         aimVector = Vector3.up,
-                        damage = base.damageStat * (swordAttack != null ? swordAttack.damage : 5f) * 1.5f * (1 + (power / chargeCap * 2f)),
+                        damage = base.damageStat * (swordAttack != null ? swordAttack.damage : 5f) * 1.5f * (1 + (chargePercentage * 2f)),
                         bulletCount = 1,
                         spreadPitchScale = 0f,
                         spreadYawScale = 0f,
@@ -4752,10 +5127,51 @@ namespace Demolisher
                 };
                 EffectManager.SpawnEffect(groundSlamVFX, effectData, true);
                 PlayAnimation("Gesture, Override", "SwingDown1", "Slash.playbackRate", swordClass.swingDownTime / characterBody.attackSpeed, 0.2f);
+                base.OnEnter();
+            }
+        }
+        public class BigAssSword : BigAssAttack
+        {
+            public override float chargeCap => 3f;
+            public DemoSwordClass swordClass;
+            public Transform swordTransform;
+            public Vector3 previousScale;
+            public override void OnEnter()
+            {
+                base.OnEnter();
+                swordClass = swordDictionary.ContainsKey(skillLocator.primary.skillDef) ? swordDictionary[skillLocator.primary.skillDef] : DefaultSword;
+                Transform modelTransform = GetComponent<ModelLocator>()?.modelTransform;
+                ChildLocator childLocator = modelTransform ? modelTransform.GetComponent<ChildLocator>() : null;
+                if (childLocator)
+                {
+                    swordTransform = childLocator.FindChild("WeaponR");
+                    if (swordTransform != null)
+                    {
+                        previousScale = swordTransform.localScale;
+                    }
+                }
+                PlayAnimation("Gesture, Override", "SwingUp", "Slash.playbackRate", swordClass.swingUpTime / base.attackSpeedStat, 0.2f);
+            }
+            public override void OnExit()
+            {
+                base.OnExit();
                 if (swordTransform)
                 {
                     swordTransform.localScale = previousScale;
                 }
+            }
+            public override void OnHold()
+            {
+                base.OnHold();
+                if (!isCharged && swordTransform)
+                {
+                    swordTransform.localScale = Vector3.MoveTowards(swordTransform.localScale, previousScale + new Vector3(chargeCap, chargeCap, chargeCap), GetDeltaTime());
+                }
+            }
+            public override void OnRelease()
+            {
+                if (isAuthority)
+                    outer.SetNextState(new BigAssSwordFire { chargePercentage = power / chargeCap });
                 base.OnRelease();
             }
         }
@@ -4830,6 +5246,7 @@ namespace Demolisher
                     demoComponent.noLimitStickies--;
                 }
                 base.OnRelease();
+                outer.SetNextStateToMain();
             }
         }
         public class BigAssAttackRedirector : BaseState
@@ -5402,11 +5819,81 @@ namespace Demolisher
             return InterruptPriority.Skill;
         }
     }*/
+        public class Slamming : BaseState
+        {
+            public float height;
+            private float stopwatch = 0f;
+            public override void OnDeserialize(NetworkReader reader)
+            {
+                base.OnDeserialize(reader);
+                height = reader.ReadSingle();
+            }
+            public override void OnSerialize(NetworkWriter writer)
+            {
+                base.OnSerialize(writer);
+                writer.Write(height);
+            }
+            public override void OnEnter()
+            {
+                base.OnEnter();
+                SpawnEffect(SlamEffect, characterBody.footPosition, false, Quaternion.identity, new Vector3(24f, 1f, 24f));
+                Collider[] collidersArray = Physics.OverlapSphere(transform.position, 24f, LayerIndex.entityPrecise.mask, QueryTriggerInteraction.UseGlobal);
+                List<CharacterBody> bodies = new List<CharacterBody>();
+                foreach (Collider collider in collidersArray)
+                {
+                    CharacterBody body = collider.GetComponent<HurtBox>() ? collider.GetComponent<HurtBox>().healthComponent.body : null;
+                    if (body && body.teamComponent.teamIndex != characterBody.teamComponent.teamIndex && !bodies.Contains(body))
+                    {
+                        bodies.Add(body);
+                    }
+                }
+                foreach (CharacterBody body in bodies)
+                {
+                    if (body.characterMotor)
+                    {
+                        if (body.characterMotor.Motor)
+                            body.characterMotor.Motor.ForceUnground(0f);
+                        body.characterMotor.velocity.y = height + 5f;
+                    }
+                    else if (body.rigidbody)
+                    {
+                        Vector3 rigidbody = body.rigidbody.velocity;
+                        rigidbody.y = height + 5f;
+                    }
+
+                    if (NetworkServer.active)
+                    {
+                        body.AddBuff(AfterSlam);
+                        body.AddBuff(DisableInputs);
+                    }
+
+                }
+
+                stopwatch = 0.5f;
+            }
+            public override void FixedUpdate()
+            {
+                base.FixedUpdate();
+                if (stopwatch < 0f && isAuthority) outer.SetNextStateToMain();
+            }
+            public override void Update()
+            {
+                base.Update();
+                if (stopwatch > 0 && characterMotor && inputBank && inputBank.jump.justPressed)
+                {
+                    SpawnEffect(SlamEffect, characterBody.footPosition, false, Quaternion.identity, new Vector3(1f, 1f, 1f));
+                    if (characterMotor.Motor)
+                        characterMotor.Motor.ForceUnground(0f);
+                    characterMotor.velocity.y = height + 5f;
+                    characterBody.AddBuffAuthotiry(AfterSlam);
+                    if (isAuthority)
+                        outer.SetNextStateToMain();
+                }
+            }
+        }
         public class Slam : BaseState
         {
             private float height;
-            private float stopwatch = 0f;
-            private bool slaming = false;
             private float radius = 24f;
             public override void OnEnter()
             {
@@ -5441,74 +5928,23 @@ namespace Demolisher
                 base.FixedUpdate();
                 if (true)
                 {
-                    if (!slaming && characterMotor)
+                    if (characterMotor)
                     {
                         characterMotor.velocity += Physics.gravity * 3 * GetDeltaTime();
                         if (characterMotor.isGrounded)
                         {
-                            SlamMethod();
+                            outer.SetNextState(new Slamming { height = height });
                         }
                     }
-                    if (stopwatch > 0f) stopwatch -= GetDeltaTime();
 
-                    if (slaming && stopwatch < 0f) outer.SetNextStateToMain();
+                    
                 }
 
             }
             public override void Update()
             {
                 base.Update();
-                if (stopwatch > 0 && characterMotor && inputBank && inputBank.jump.justPressed)
-                {
-                    SpawnEffect(SlamEffect, characterBody.footPosition, false, Quaternion.identity, new Vector3(radius, 1f, radius));
-                    if (characterMotor.Motor)
-                        characterMotor.Motor.ForceUnground(0f);
-                    characterMotor.velocity.y = height + 5f;
-                    if (NetworkServer.active)
-                    {
-                        characterBody.AddBuff(AfterSlam);
-                    }
-                    outer.SetNextStateToMain();
-                }
-            }
-            public void SlamMethod()
-            {
-                slaming = true;
-                SpawnEffect(SlamEffect, characterBody.footPosition, false, Quaternion.identity, new Vector3(radius, 1f, radius));
-                Collider[] collidersArray = Physics.OverlapSphere(transform.position, radius, LayerIndex.entityPrecise.mask, QueryTriggerInteraction.UseGlobal);
-                List<CharacterBody> bodies = new List<CharacterBody>();
-                foreach (Collider collider in collidersArray)
-                {
-                    CharacterBody body = collider.GetComponent<HurtBox>() ? collider.GetComponent<HurtBox>().healthComponent.body : null;
-                    if (body && body.teamComponent.teamIndex != characterBody.teamComponent.teamIndex && !bodies.Contains(body))
-                    {
-                        bodies.Add(body);
-                    }
-                }
-                foreach (CharacterBody body in bodies)
-                {
-                    if (body.characterMotor)
-                    {
-                        if (body.characterMotor.Motor)
-                            body.characterMotor.Motor.ForceUnground(0f);
-                        body.characterMotor.velocity.y = height + 5f;
-                    }
-                    else if (body.rigidbody)
-                    {
-                        Vector3 rigidbody = body.rigidbody.velocity;
-                        rigidbody.y = height + 5f;
-                    }
-
-                    if (NetworkServer.active)
-                    {
-                        body.AddBuff(AfterSlam);
-                        body.AddBuff(DisableInputs);
-                    }
-                    
-                }
-
-
-                stopwatch = 0.5f;
+                
             }
         }
         public class ChangeWeapons : BaseState
@@ -5692,5 +6128,40 @@ public static class EmoteCompatAbility
                 shield.gameObject.SetActive(true);
             }
         }
+    }
+}
+public static class Extensions
+{
+    public static void AddBuffAuthotiry(this CharacterBody characterBody, BuffDef buffDef)
+    {
+        characterBody.AddBuffAuthotiry(buffDef.buffIndex);
+    }
+    public static void AddBuffAuthotiry(this CharacterBody characterBody, BuffIndex buffIndex)
+    {
+        characterBody.AddOrRemoveBuffAuthotiry(buffIndex, 1);
+    }
+    public static void RemoveBuffAuthotiry(this CharacterBody characterBody, BuffDef buffDef)
+    {
+        characterBody.RemoveBuffAuthotiry(buffDef.buffIndex);
+    }
+    public static void RemoveBuffAuthotiry(this CharacterBody characterBody, BuffIndex buffIndex)
+    {
+        characterBody.AddOrRemoveBuffAuthotiry(buffIndex, -1);
+    }
+    public static void AddOrRemoveBuffAuthotiry(this CharacterBody characterBody, BuffDef buffDef, int amount)
+    {
+        characterBody.AddOrRemoveBuffAuthotiry(buffDef.buffIndex, amount);
+    }
+    public static void AddOrRemoveBuffAuthotiry(this CharacterBody characterBody, BuffIndex buffIndex, int amount)
+    {
+        new AddBuffNetMessage(characterBody.netId, buffIndex, amount, -1f).Send(NetworkDestination.Clients);
+    }
+    public static void AddTimedBuffAuthotiry(this CharacterBody characterBody, BuffDef buffDef, int amount, float duration)
+    {
+        characterBody.AddTimedBuffAuthotiry(buffDef.buffIndex, amount, duration);
+    }
+    public static void AddTimedBuffAuthotiry(this CharacterBody characterBody, BuffIndex buffIndex, int amount, float duration)
+    {
+        new AddBuffNetMessage(characterBody.netId, buffIndex, amount, duration).Send(NetworkDestination.Clients);
     }
 }
