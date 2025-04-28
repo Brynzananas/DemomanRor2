@@ -66,6 +66,7 @@ namespace Demolisher
         public static Dictionary<int, GameObject> idToEffect = new Dictionary<int, GameObject>();
         public static Dictionary<GameObject, int> effectToId = new Dictionary<GameObject, int>();
         public static SurvivorDef DemoSurvivorDef;
+        public static BodyIndex DemoBodyIndex;
         public static SkinDef DemoDefaultSkin;
         public void Awake()
         {
@@ -119,6 +120,7 @@ namespace Demolisher
             On.EntityStates.GenericCharacterMain.CanExecuteSkill += GenericCharacterMain_CanExecuteSkill;
             On.EntityStates.GenericCharacterMain.HandleMovements += GenericCharacterMain_HandleMovements;
             On.RoR2.MapZone.TryZoneStart += MapZone_TryZoneStart;
+            On.RoR2.BodyCatalog.SetBodyPrefabs += BodyCatalog_SetBodyPrefabs;
             ContentManager.collectContentPackProviders += (addContentPackProvider) =>
             {
                 addContentPackProvider(new ContentPacks());
@@ -126,17 +128,24 @@ namespace Demolisher
 
         }
 
+        private void BodyCatalog_SetBodyPrefabs(On.RoR2.BodyCatalog.orig_SetBodyPrefabs orig, GameObject[] newBodyPrefabs)
+        {
+            orig(newBodyPrefabs);
+            DemoBodyIndex = BodyCatalog.FindBodyIndex("DemolisherBody");
+        }
+
         private void CreateINetMessages()
         {
             NetworkingAPI.RegisterMessageType<HookNetMessage>();
-            NetworkingAPI.RegisterMessageType<SwordEffectNetMessage>();
             NetworkingAPI.RegisterMessageType<AddBuffNetMessage>();
+            NetworkingAPI.RegisterMessageType<UngroundNetMessage>();
+            NetworkingAPI.RegisterMessageType<SwordEffectNetMessage>();
             NetworkingAPI.RegisterMessageType<AddBodyEffectNetMessage>();
             NetworkingAPI.RegisterMessageType<RemoveBodyEffectNetMessage>();
-            NetworkingAPI.RegisterMessageType<ModifyBooleanOfCharacterMotorNetMessage>();
+            NetworkingAPI.RegisterMessageType<ModifyVectorOfRigidBodyNetMessage>();
             NetworkingAPI.RegisterMessageType<ModifyFloatOfCharacterMotortNetMessage>();
             NetworkingAPI.RegisterMessageType<ModifyVectorOfCharacterMotorNetMessage>();
-            NetworkingAPI.RegisterMessageType<ModifyVectorOfRigidBodyNetMessage>();
+            NetworkingAPI.RegisterMessageType<ModifyBooleanOfCharacterMotorNetMessage>();
             NetworkingAPI.RegisterMessageType<RemoveComponentFromNetworkObjectNetMessage>();
         }
         public class RemoveBodyEffectNetMessage : INetMessage
@@ -347,6 +356,36 @@ namespace Demolisher
 
             }
         }
+        public class UngroundNetMessage : INetMessage
+        {
+            NetworkInstanceId instanceId;
+            public UngroundNetMessage(NetworkInstanceId networkInstanceId)
+            {
+                instanceId = networkInstanceId;
+            }
+            public UngroundNetMessage()
+            {
+
+            }
+            public void Deserialize(NetworkReader reader)
+            {
+                instanceId = reader.ReadNetworkId();
+            }
+
+            public void OnReceived()
+            {
+                GameObject gameObject = Util.FindNetworkObject(instanceId);
+                if (gameObject == null) return;
+                var component = gameObject.GetComponent<KinematicCharacterMotor>();
+                if (component == null) return;
+                component.ForceUnground();
+            }
+
+            public void Serialize(NetworkWriter writer)
+            {
+                writer.Write(instanceId);
+            }
+        }
         public class ModifyBooleanOfCharacterMotorNetMessage : INetMessage
         {
             NetworkInstanceId instanceId;
@@ -535,6 +574,7 @@ namespace Demolisher
                 AboveMapZoneTracker aboveMapZoneTracker = other.gameObject.GetOrAddComponent<AboveMapZoneTracker>();
                 aboveMapZoneTracker.characterBody = component;
                 aboveMapZoneTracker.zone = self;
+                aboveMapZoneTracker.timer = 1f;
                 return;
             }
             
@@ -544,10 +584,14 @@ namespace Demolisher
         {
             public CharacterBody characterBody;
             public MapZone zone;
-
+            public float timer = 1f;
+            public Collider collider;
+            public float radius = 1f;
             public void Start()
             {
                 if (!characterBody) characterBody = GetComponent<CharacterBody>();
+                if (!collider) collider = GetComponent<Collider>();
+                radius = collider.bounds.size.magnitude / 3;
             }
             public void FixedUpdate()
             {
@@ -555,8 +599,11 @@ namespace Demolisher
                 {
                     Destroy(this); return;
                 }
+                if(timer >= 0)
+                timer -= Time.fixedDeltaTime;
                 bool save = false;
-                RaycastHit[] raycastHits = Physics.RaycastAll(transform.position, Physics.gravity, 9999f, LayerIndex.collideWithCharacterHullOnly.intVal, QueryTriggerInteraction.Collide);
+                
+                RaycastHit[] raycastHits = Physics.RaycastAll(transform.position, new Vector3(0f, Physics.gravity.y, 0f).normalized, 9999f, LayerIndex.collideWithCharacterHullOnly.mask, QueryTriggerInteraction.Collide);
                 if (raycastHits != null && raycastHits.Length > 0)
                 {
                     
@@ -574,6 +621,23 @@ namespace Demolisher
                     
                 }
                 if (!save)
+                {
+                    Collider[] colliders = Physics.OverlapSphere(collider.transform.position, radius, LayerIndex.collideWithCharacterHullOnly.mask, QueryTriggerInteraction.Collide);
+                    if (colliders != null && colliders.Length > 0)
+                    {
+                        foreach (Collider collider in colliders)
+                        {
+                            MapZone zone2 = collider.GetComponent<MapZone>();
+                            if (zone && zone == zone2)
+                            {
+                                save = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                
+                if (!save && timer < 0)
                 {
                     characterBody.SetBuffCount(AfterSlam.buffIndex, 0);
                     if (zone)
@@ -612,15 +676,15 @@ namespace Demolisher
                             {
                                 characterBody1.AddTimedBuff(RoR2Content.Buffs.Cripple, 12f);
                             }
-                            if (characterBody1.isPlayerControlled && !characterBody1.isServer)
+                            if (characterBody1.isPlayerControlled)
                             {
                                 if (characterBody1.characterMotor)
                                 {
-                                    new ModifyVectorOfCharacterMotorNetMessage(characterBody1.netId, "velocity", new Vector3(characterBody1.characterMotor.velocity.x, characterBody1.characterMotor.velocity.y, characterBody1.characterMotor.velocity.z)).Send(NetworkDestination.Clients);
+                                    new ModifyVectorOfCharacterMotorNetMessage(characterBody1.netId, "velocity", new Vector3(characterBody1.characterMotor.velocity.x, 24f, characterBody1.characterMotor.velocity.z)).Send(NetworkDestination.Clients);
                                 }
                                 else if (characterBody1.rigidbody)
                                 {
-                                    new ModifyVectorOfRigidBodyNetMessage(characterBody1.netId, "velocity", new Vector3(characterBody1.rigidbody.velocity.x, characterBody1.rigidbody.velocity.y, characterBody1.rigidbody.velocity.z)).Send(NetworkDestination.Clients);
+                                    new ModifyVectorOfRigidBodyNetMessage(characterBody1.netId, "velocity", new Vector3(characterBody1.rigidbody.velocity.x, 24f, characterBody1.rigidbody.velocity.z)).Send(NetworkDestination.Clients);
                                 }
                             }
                             else
@@ -715,6 +779,11 @@ namespace Demolisher
             {
                 bodyToken = tokenReplace[bodyToken];
             }
+            //if (bodyToken == DetonateSkillDef.skillDescriptionToken)                         //!!!
+            //{
+            //    Destroy((self as LoadoutPanelController.Row).rowPanelTransform.gameObject);
+            //    return;
+            //}
             orig(self, owner, icon, titleToken, bodyToken, tooltipColor, callback, unlockableName, viewableNode, isWIP, defIndex);
         }
 
@@ -1174,16 +1243,30 @@ namespace Demolisher
             InteractionDriver interactionDriver = DemoBody.GetComponent<InteractionDriver>();
             EntityStateMachine entityStateMachine = DemoBody.GetComponent<EntityStateMachine>();
             entityStateMachine.mainStateType = new SerializableEntityStateType(typeof(DemoCharacterMain));
-            DemoSmokes = new ModelPart("DemolisherBody", ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/DemoSmokes.prefab"), "Head", inputCodeAfterApplying: CustomParticleSimulationSpace);
+            ModelPartInfo modelPartInfo = new ModelPartInfo
+            {
+                bodyName = "DemolisherBody",
+                gameObject = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/DemoSmokes.prefab"),
+                inputString = "Head",
+                codeAfterApplying = CustomParticleSimulationSpace,
+            };
+            DemoSmokes = new ModelPart(modelPartInfo);
             void CustomParticleSimulationSpace(GameObject gameObject, ChildLocator childLocator, CharacterModel characterModel, ActivePartsComponent activePartsComponent)
             {
+                EmoteCompatAbility.DemoEmotesComponent demoEmotesComponent = characterModel.GetComponentInChildren<EmoteCompatAbility.DemoEmotesComponent>();
                 ParticleSystem[] particleSystems = gameObject.GetComponentsInChildren<ParticleSystem>();
                 foreach (ParticleSystem particleSystem in particleSystems)
                 {
                     ParticleSystem.MainModule mainModule = particleSystem.main;
                     particleSystem.simulationSpace = ParticleSystemSimulationSpace.Custom;
                     mainModule.customSimulationSpace = childLocator.FindChild("Base");
+                    if (demoEmotesComponent != null)
+                    {
+                        demoEmotesComponent.customSpaceParticles.Add(mainModule);
+                    }
+
                 }
+
             }
             bodies.Add(DemoBody);
             DemoSurvivorDef = Main.ThunderkitAssets.LoadAsset<SurvivorDef>("Assets/Demoman/DemoSurvivor.asset");
@@ -1594,7 +1677,7 @@ namespace Demolisher
                         }
                         if (characterMotor.Motor) characterMotor.Motor.ForceUnground(0f);
                         body.characterMotor.velocity += body.teamComponent.teamIndex == teamIndex ? pushVector * selfPower : pushVector * enemyPower / Vector3.Distance(characterPosition, explosionPosition);
-                        if (body.teamComponent.teamIndex == teamIndex)
+                        if (body.teamComponent.teamIndex == teamIndex && NetworkServer.active)
                             body.AddBuff(VelocityPreserve);
                         body.characterMotor.disableAirControlUntilCollision = true;
                     }
@@ -1869,6 +1952,17 @@ namespace Demolisher
                                 //Vector3 direction = hookedObject.transform.position - stickedBody.transform.position;
                                 
                                 stickedBody.characterMotor.velocity = direction * 4;
+                                if (stickedBody.characterMotor.isGrounded && stickedBody.characterMotor.Motor)
+                                {
+                                    if (stickedBody.isPlayerControlled)
+                                    {
+                                        new UngroundNetMessage(stickedBody.netId).Send(NetworkDestination.Clients);
+                                    }
+                                    else
+                                    {
+                                        stickedBody.characterMotor.Motor.ForceUnground();
+                                    }
+                                }
                             }
                             else if (stickedBody.rigidbody)
                             {
@@ -1878,7 +1972,7 @@ namespace Demolisher
                         }
                         else
                         {
-                            if (!isStickedAnEnemy && characterMotor)
+                            if ((isStickedAnEnemy ? stickedBody.isChampion : true) && characterMotor)
                             {
                                 //Vector3 vector = hookedObject.transform.position - inputBankTest.aimOrigin;
                                 //float disance = vector.magnitude;
@@ -3887,12 +3981,32 @@ namespace Demolisher
         }
         private static void InitWeaponModels()
         {
-            SkullcutterSwordSkin = new ModelPart("DemolisherBody", ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/Weapons/Swords/skullcutter.prefab"), "WeaponR", inputSkillDef: SkullcutterSkillDef, inputCodeAfterApplying: Rotate);
-            ZatoichiSwordSkin = new ModelPart("DemolisherBody", ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/Weapons/Swords/zatoichi.prefab"), "WeaponR", inputSkillDef: ZatoichiSkillDef, inputCodeAfterApplying: Rotate);
-            CaberSwordSkin = new ModelPart("DemolisherBody", ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/Weapons/Swords/caber.prefab"), "WeaponR", inputSkillDef: CaberSkillDef, inputCodeAfterApplying: Rotate);
-            EyelanderSwordSkin = new ModelPart("DemolisherBody", ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/Weapons/Swords/eyelander.prefab"), "WeaponR", inputSkillDef: EyelanderSkillDef, inputCodeAfterApplying: Rotate);
-            HeavyShieldSkin = new ModelPart("DemolisherBody", ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/Weapons/Shield/HeavyShield.prefab"), "Shield", inputSkillDef: HeavyShieldSkillDef);
-            LightShieldSkin = new ModelPart("DemolisherBody", ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/Weapons/Shield/LightShield.prefab"), "Shield", inputSkillDef: LightShieldSkillDef);
+            ModelPartInfo modelPartInfo = new ModelPartInfo
+            {
+                bodyName = "DemolisherBody",
+                gameObject = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/Weapons/Swords/skullcutter.prefab"),
+                inputString = "WeaponR",
+                skillDef = SkullcutterSkillDef,
+                codeAfterApplying = Rotate
+            };
+            SkullcutterSwordSkin = new ModelPart(modelPartInfo);
+            modelPartInfo.gameObject = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/Weapons/Swords/zatoichi.prefab");
+            modelPartInfo.skillDef = ZatoichiSkillDef;
+            ZatoichiSwordSkin = new ModelPart(modelPartInfo);
+            modelPartInfo.gameObject = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/Weapons/Swords/caber.prefab");
+            modelPartInfo.skillDef = CaberSkillDef;
+            CaberSwordSkin = new ModelPart(modelPartInfo);
+            modelPartInfo.gameObject = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/Weapons/Swords/eyelander.prefab");
+            modelPartInfo.skillDef = EyelanderSkillDef;
+            EyelanderSwordSkin = new ModelPart(modelPartInfo);
+            modelPartInfo.gameObject = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/Weapons/Shield/HeavyShield.prefab");
+            modelPartInfo.skillDef = HeavyShieldSkillDef;
+            modelPartInfo.inputString = "Shield";
+            modelPartInfo.codeAfterApplying = null;
+            HeavyShieldSkin = new ModelPart(modelPartInfo);
+            modelPartInfo.gameObject = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/Weapons/Shield/LightShield.prefab");
+            modelPartInfo.skillDef = LightShieldSkillDef;
+            LightShieldSkin = new ModelPart(modelPartInfo);
             void Rotate(GameObject gameObject, ChildLocator childLocator, CharacterModel characterModel, ActivePartsComponent activePartsComponent)
             {
                 gameObject.transform.localEulerAngles = new Vector3(0f, 180f, 0f);
@@ -5063,7 +5177,7 @@ namespace Demolisher
             public override void OnEnter()
             {
                 base.OnEnter();
-                bulletAttack = swordDictionary.ContainsKey(skillLocator.primary.skillDef) ? swordDictionary[skillLocator.primary.skillDef].bulletAttack : DefaultSword.bulletAttack;
+                bulletAttack = swordDictionary.ContainsKey(skillLocator.primary.baseSkill) ? swordDictionary[skillLocator.primary.baseSkill].bulletAttack : DefaultSword.bulletAttack;
                 spinner = GameObject.Instantiate(Main.SpecialSpinner);
                 spinner.transform.parent = characterDirection.targetTransform;
                 spinner.transform.rotation = characterDirection.targetTransform.rotation;
@@ -5099,7 +5213,7 @@ namespace Demolisher
             public override void OnEnter()
             {
                 base.OnEnter();
-                DemoStickyClass demoSticky = bombProjectiles.ContainsKey(skillLocator.primary.skillDef) ? bombProjectiles[skillLocator.primary.skillDef] : null;
+                DemoStickyClass demoSticky = bombProjectiles.ContainsKey(skillLocator.primary.baseSkill) ? bombProjectiles[skillLocator.primary.baseSkill] : null;
                 projectile = demoSticky != null ? demoSticky.stickyObject : LegacyResourcesAPI.Load<GameObject>("Prefabs/Projectiles/FireMeatBall");
                 damage = demoSticky != null ? demoSticky.stickyState.damage : 4;
                 spinner = GameObject.Instantiate(Main.SpecialSpinner);
@@ -5152,17 +5266,17 @@ namespace Demolisher
             public override void OnSerialize(NetworkWriter writer)
             {
                 base.OnSerialize(writer);
-                writer.Write((byte)chargePercentage);
+                writer.Write(chargePercentage);
             }
             public override void OnDeserialize(NetworkReader reader)
             {
                 base.OnDeserialize(reader);
-                chargePercentage = (float)reader.ReadByte();
+                chargePercentage = reader.ReadSingle();
             }
             public override void OnEnter()
             {
                 base.OnEnter();
-                outer.SetNextStateToMain();
+                
             }
         }
         public abstract class BigAssAttack : BaseState
@@ -5247,14 +5361,12 @@ namespace Demolisher
             public DemoSwordClass swordClass;
             public override void OnEnter()
             {
-                swordClass = swordDictionary.ContainsKey(skillLocator.primary.skillDef) ? swordDictionary[skillLocator.primary.skillDef] : DefaultSword;
+                base.OnEnter();
+                swordClass = swordDictionary.ContainsKey(skillLocator.primary.baseSkill) ? swordDictionary[skillLocator.primary.baseSkill] : DefaultSword;
                 BulletAttack swordAttack = swordClass.bulletAttack;
                 Vector3 center = inputBank ? inputBank.aimOrigin + characterDirection.forward * swordAttack.maxDistance : transform.position + characterDirection.forward * swordAttack.maxDistance;
                 if (NetworkServer.active)
                 {
-                    Debug.Log("Sword Damage: " + swordAttack.damage);
-                    Debug.Log("Charge Percentage: " + chargePercentage);
-                    Debug.Log("Damage State: " + damageStat);
                     BulletAttack bulletAttack2 = new BulletAttack()
                     {
                         radius = swordAttack.maxDistance,
@@ -5280,9 +5392,7 @@ namespace Demolisher
                         hitCallback = swordAttack != null ? swordAttack.hitCallback : default,
 
                     };
-                    Debug.Log("Total Damage Before: " + bulletAttack2.damage);
                     bulletAttack2.Fire();
-                    Debug.Log("Total Damage After: " + bulletAttack2.damage);
 
                 }
                 EffectData effectData = new EffectData
@@ -5292,7 +5402,7 @@ namespace Demolisher
                 };
                 EffectManager.SpawnEffect(groundSlamVFX, effectData, true);
                 PlayAnimation("Gesture, Override", "SwingDown1", "Slash.playbackRate", swordClass.swingDownTime / characterBody.attackSpeed, 0.2f);
-                base.OnEnter();
+                outer.SetNextStateToMain();
             }
         }
         public class BigAssSword : BigAssAttack
@@ -5304,7 +5414,7 @@ namespace Demolisher
             public override void OnEnter()
             {
                 base.OnEnter();
-                swordClass = swordDictionary.ContainsKey(skillLocator.primary.skillDef) ? swordDictionary[skillLocator.primary.skillDef] : DefaultSword;
+                swordClass = swordDictionary.ContainsKey(skillLocator.primary.baseSkill) ? swordDictionary[skillLocator.primary.baseSkill] : DefaultSword;
                 Transform modelTransform = GetComponent<ModelLocator>()?.modelTransform;
                 ChildLocator childLocator = modelTransform ? modelTransform.GetComponent<ChildLocator>() : null;
                 if (childLocator)
@@ -5351,7 +5461,7 @@ namespace Demolisher
             public override void OnEnter()
             {
                 base.OnEnter();
-                DemoStickyClass demoSticky = bombProjectiles.ContainsKey(skillLocator.primary.skillDef) ? bombProjectiles[skillLocator.primary.skillDef] : null;
+                DemoStickyClass demoSticky = bombProjectiles.ContainsKey(skillLocator.primary.baseSkill) ? bombProjectiles[skillLocator.primary.baseSkill] : null;
                 projectile = demoSticky != null ? demoSticky.stickyObject : LegacyResourcesAPI.Load<GameObject>("Prefabs/Projectiles/FireMeatBall");
                 damage = demoSticky != null ? demoSticky.stickyState.damage : 4;
                 demoComponent = GetComponent<DemoComponent>();
@@ -5534,7 +5644,7 @@ namespace Demolisher
             public override void OnEnter()
             {
                 base.OnEnter();
-                bulletAttack = swordDictionary.ContainsKey(skillLocator.primary.skillDef) ? swordDictionary[skillLocator.primary.skillDef].bulletAttack : DefaultSword.bulletAttack;
+                bulletAttack = swordDictionary.ContainsKey(skillLocator.primary.baseSkill) ? swordDictionary[skillLocator.primary.baseSkill].bulletAttack : DefaultSword.bulletAttack;
             }
             public override void Action(CharacterBody enemyBody, Vector3 enemyPosition, Vector3 previousPosition)
             {
@@ -5580,7 +5690,7 @@ namespace Demolisher
             public override void OnEnter()
             {
                 base.OnEnter();
-                DemoStickyClass demoSticky = bombProjectiles.ContainsKey(skillLocator.primary.skillDef) ? bombProjectiles[skillLocator.primary.skillDef] : null;
+                DemoStickyClass demoSticky = bombProjectiles.ContainsKey(skillLocator.primary.baseSkill) ? bombProjectiles[skillLocator.primary.baseSkill] : null;
                 projectile = demoSticky != null ? demoSticky.stickyObject : LegacyResourcesAPI.Load<GameObject>("Prefabs/Projectiles/FireMeatBall");
                 damage = demoSticky != null ? demoSticky.stickyState.damage : 4;
                 demoComponent = GetComponent<DemoComponent>();
@@ -5855,7 +5965,7 @@ namespace Demolisher
             public override void OnFound()
             {
                 base.OnFound();
-                bulletAttack = swordDictionary.ContainsKey(skillLocator.primary.skillDef) ? swordDictionary[skillLocator.primary.skillDef].bulletAttack : DefaultSword.bulletAttack;
+                bulletAttack = swordDictionary.ContainsKey(skillLocator.primary.baseSkill) ? swordDictionary[skillLocator.primary.baseSkill].bulletAttack : DefaultSword.bulletAttack;
             }
             public override void OnContact()
             {
@@ -5901,7 +6011,7 @@ namespace Demolisher
             public override void OnEnter()
             {
                 base.OnEnter();
-                DemoStickyClass demoSticky = bombProjectiles.ContainsKey(skillLocator.primary.skillDef) ? bombProjectiles[skillLocator.primary.skillDef] : null;
+                DemoStickyClass demoSticky = bombProjectiles.ContainsKey(skillLocator.primary.baseSkill) ? bombProjectiles[skillLocator.primary.baseSkill] : null;
                 projectile = demoSticky != null ? demoSticky.stickyObject : LegacyResourcesAPI.Load<GameObject>("Prefabs/Projectiles/FireMeatBall");
                 damage = demoSticky != null ? demoSticky.stickyState.damage : 4;
                 demoComponent = GetComponent<DemoComponent>();
@@ -6259,6 +6369,7 @@ public static class EmoteCompatAbility
     {
         string path = "Assets/Demoman/DemoEmotes.prefab";
         var skele = ThunderkitAssets.LoadAsset<GameObject>(path);
+        skele.AddComponent<DemoEmotesComponent>();
         EmotesAPI.CustomEmotesAPI.ImportArmature(DemoBody, skele);
         skele.GetComponentInChildren<BoneMapper>().scale = 1f;
         skele.transform.localPosition = new Vector3(0f, -0f, 0f);
@@ -6269,6 +6380,7 @@ public static class EmoteCompatAbility
     {
         if (mapper.transform.name == "DemoEmotes")
         {
+            DemoEmotesComponent demoEmotesComponent = mapper.GetComponent<DemoEmotesComponent>();
             ChildLocator childLocator = mapper.transform.parent.GetComponent<ChildLocator>();
             ChildLocator childLocator2 = mapper.GetComponent<ChildLocator>();
             //Transform smokes = childLocator.FindChild("Smokes");
@@ -6283,7 +6395,11 @@ public static class EmoteCompatAbility
                 weaponR.gameObject.SetActive(false);
                 weaponL.gameObject.SetActive(false);
                 shield.gameObject.SetActive(false);
-
+                for (int i = 0; i < demoEmotesComponent.customSpaceParticles.Count; i++)
+                {
+                    ParticleSystem.MainModule mainModule = demoEmotesComponent.customSpaceParticles[i];
+                    mainModule.simulationSpace = ParticleSystemSimulationSpace.Local;
+                }
             }
             else
             {
@@ -6292,8 +6408,18 @@ public static class EmoteCompatAbility
                 weaponR.gameObject.SetActive(true);
                 weaponL.gameObject.SetActive(true);
                 shield.gameObject.SetActive(true);
+                for (int i = 0; i < demoEmotesComponent.customSpaceParticles.Count; i++)
+                {
+                    ParticleSystem.MainModule mainModule = demoEmotesComponent.customSpaceParticles[i];
+                    mainModule.simulationSpace = ParticleSystemSimulationSpace.Custom;
+                }
             }
         }
+        
+    }
+    public class DemoEmotesComponent : MonoBehaviour
+    {
+        public List<ParticleSystem.MainModule> customSpaceParticles = new List<ParticleSystem.MainModule>();
     }
 }
 public static class Extensions
