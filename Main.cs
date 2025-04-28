@@ -33,8 +33,7 @@ using static BodyModelAdditionsAPI.Main;
 using R2API.Networking.Interfaces;
 using R2API.Networking;
 using HG;
-using static UnityEngine.SendMouseEvents;
-using UnityEngine.XR;
+using UnityEngine.EventSystems;
 [assembly: SecurityPermission(SecurityAction.RequestMinimum, SkipVerification = true)]
 [assembly: HG.Reflection.SearchableAttribute.OptIn]
 [assembly: HG.Reflection.SearchableAttribute.OptInAttribute]
@@ -97,7 +96,7 @@ namespace Demolisher
                 //ContentAddition.AddSkillFamily(skillFamily);
             }
             emotesEnabled = BepInEx.Bootstrap.Chainloader.PluginInfos.ContainsKey(EmoteCompatAbility.customEmotesApiGUID);
-
+            CreateGmodAssets();
             CreateINetMessages();
             CreateAssets();
             CreateSurvivor();
@@ -1071,6 +1070,10 @@ namespace Demolisher
         public static Sprite ShieldIndicator;
         public static Sprite DetonateIndicator;
         public static ModelPart DemoSmokes;
+        public static GameObject GmodHud;
+        public static GameObject GmodPropButton;
+        public static GameObject GmodPropPlane;
+        public static GameObject GmodPropThuster;
         public static BuffDef AddBuff(string name, bool canStack, bool isDebuff, bool isCooldown, bool isHidden, bool ignoreGrowthNectar, Sprite sprite = null)
         {
             BuffDef buff = ScriptableObject.CreateInstance<BuffDef>();
@@ -1102,6 +1105,30 @@ namespace Demolisher
             ItemAPI.Add(new CustomItem(item, itemDisplayRuleDict));
             return item;
         }
+        private static void CreateGmodAssets()
+        {
+            GmodHud = ThunderkitAssets.LoadAsset<GameObject>("Assets/Gmod/GmodPropsHud.prefab");
+            GmodPropButton = ThunderkitAssets.LoadAsset<GameObject>("Assets/Gmod/GmodProp.prefab");
+            GmodPropButton.AddComponent<GmodPropUIButton>();
+            GmodPropPlane = ThunderkitAssets.LoadAsset<GameObject>("Assets/Gmod/1x1Plane.prefab");
+            GmodPropThuster = ThunderkitAssets.LoadAsset<GameObject>("Assets/Gmod/Thuster.prefab");
+            GmodPropThuster.AddComponent<GmodPropThusterComponent>();
+            GmodPropsCatalog.AddProp(new GmodPropDef { gameObject = GmodPropPlane, icon = ThunderkitAssets.LoadAsset<Sprite>("Assets/Gmod/1x1plane.png"), placeObjectDelegate = PlanePlace });
+            GmodPropsCatalog.AddProp(new GmodPropDef { gameObject = GmodPropThuster, icon = ThunderkitAssets.LoadAsset<Sprite>("Assets/Gmod/thruster.png"), placeObjectDelegate = ThusterPlace });
+        }
+
+        private static void PlanePlace(GameObject gameObject, Collider hitCollider, RaycastHit raycastHit, GameObject owner)
+        {
+            gameObject.transform.position += new Vector3(0f, 2f, 0f);
+        }
+        private static void ThusterPlace(GameObject gameObject, Collider hitCollider, RaycastHit raycastHit, GameObject owner)
+        {
+            gameObject.transform.parent = hitCollider.transform;
+            gameObject.transform.position += raycastHit.normal;
+            gameObject.transform.rotation = Quaternion.LookRotation(raycastHit.normal * -1);
+            gameObject.GetComponent<GmodPropThusterComponent>().inputBank = owner.GetComponent<InputBankTest>();
+        }
+
         private static void CreateAssets()
         {
             Main.ExtraCritChance = Main.AddBuff("ExtraCritChance", true, false, false, false, false, ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Buffs/DemoSkullcutterBuff.png"));//, RoR2Content.Buffs.FullCrit.iconSprite);
@@ -2159,6 +2186,11 @@ namespace Demolisher
             public CrosshairController.SpritePosition[] spritePositions;
             private bool isUtilitydown = false;
             private bool wasUtilitydown = false;
+            public GmodPropDef currentProp;
+            public Image currentPropImage;
+            public OverlayController gmodOverlayController;
+            public GameObject gmodPropsListObject;
+            public int index = 0;
             public int stickyCount
             {
                 get
@@ -2238,6 +2270,15 @@ namespace Demolisher
                 this.overlayController = HudOverlayManager.AddOverlay(base.gameObject, overlayCreationParams);
                 this.overlayController.onInstanceAdded += OnOverlayInstanceAdded;
                 this.overlayController.onInstanceRemove += OnOverlayInstanceRemoved;
+                return;
+                OverlayCreationParams overlayCreationParams2 = new OverlayCreationParams
+                {
+                    prefab = GmodHud,
+                    childLocatorEntry = "CrosshairExtras"
+                };
+                this.gmodOverlayController = HudOverlayManager.AddOverlay(base.gameObject, overlayCreationParams2);
+                this.gmodOverlayController.onInstanceAdded += OnOverlayInstanceAdded;
+                this.gmodOverlayController.onInstanceRemove += OnOverlayInstanceRemoved;
                 //meterImage = overlayController.instancesList[0].GetComponent<Image>();
             }
 
@@ -2315,7 +2356,23 @@ namespace Demolisher
             {
                 if (canUseUtility && canUseUtilityTimer > 0f) canUseUtilityTimer -= Time.fixedDeltaTime;
                 if (canUseSecondary && canUseSecondaryTimer > 0f) canUseSecondaryTimer -= Time.fixedDeltaTime;
-
+                if (!gmodPropsListObject && gmodOverlayController != null && gmodOverlayController.instancesList.Count > 0)
+                {
+                    GameObject gmodHud = gmodOverlayController.instancesList[0];
+                    gmodPropsListObject = gmodHud.transform.Find("GmodPropsList").gameObject;
+                    gmodPropsListObject.SetActive(false);
+                    Transform grid = gmodPropsListObject.transform.GetChild(0);
+                    foreach (var prop in GmodPropsCatalog.props)
+                    {
+                        GameObject newProp = Instantiate(GmodPropButton, grid);
+                        GmodPropUIButton gmodPropUIButton = newProp.GetComponent<GmodPropUIButton>();
+                        gmodPropUIButton.demoComponent = this;
+                        gmodPropUIButton.gmodProp = prop;
+                        Image image = newProp.GetComponent<Image>();
+                        image.sprite = prop.icon;
+                    }
+                    currentPropImage = gmodHud.transform.Find("GmodPropIndicator/GmodPropImage").GetComponent<Image>();
+                }
                 if (!hudObject && overlayController != null && overlayController.instancesList.Count > 0)
                 {
                     List<CrosshairController.SpritePosition> spritePositions2 = new List<CrosshairController.SpritePosition>();
@@ -2464,6 +2521,33 @@ namespace Demolisher
             }
             public void Update()
             {
+                if (Input.GetKeyUp(KeyCode.K))
+                {
+                    if (gmodPropsListObject)
+                    {
+                        if (gmodPropsListObject.activeSelf)
+                        {
+                            gmodPropsListObject.SetActive(false);
+                        }
+                        else
+                        {
+                            gmodPropsListObject.SetActive(true);
+                        }
+                    }
+                    if (Input.GetKeyUp(KeyCode.J))
+                    {
+                        if (gmodPropsListObject)
+                        {
+                            gmodPropsListObject.transform.GetChild(0).GetChild(index).GetComponent<GmodPropUIButton>().JustDoIt();
+                            index++;
+                            if (index > gmodPropsListObject.transform.GetChild(0).childCount - 1)
+                            {
+                                index = 0;
+                            }
+                        }
+
+                    }
+                }
                 if (inputBank && skillLocator)
                 {
                     wasUtilitydown = isUtilitydown;
@@ -2530,6 +2614,78 @@ namespace Demolisher
                         useUtility = false;
                     }
 
+                }
+            }
+        }
+        public class GmodPropDef
+        {
+            public Sprite icon;
+            public GameObject gameObject;
+            public PlaceObject placeObjectDelegate;
+        }
+        public delegate void PlaceObject(GameObject gameObject, Collider hitCollider, RaycastHit raycastHit, GameObject owner);
+        public class GmodPropsCatalog
+        {
+            public static List<GmodPropDef> props = new List<GmodPropDef>(); 
+            public static Dictionary<int, GmodPropDef> idToProp = new Dictionary<int, GmodPropDef>();
+            public static Dictionary<GmodPropDef, int> propToId = new Dictionary<GmodPropDef, int>();
+            public static void AddProp(GmodPropDef gmodProp)
+            {
+                props.Add(gmodProp);
+                int i = idToProp.Count;
+                idToProp.Add(i, gmodProp);
+                propToId.Add(gmodProp, i);
+            }
+        }
+        public class GmodPropUIButton : MonoBehaviour,  IPointerClickHandler
+        {
+            public GmodPropDef gmodProp;
+            public DemoComponent demoComponent;
+            public void JustDoIt()
+            {
+                if (demoComponent)
+                {
+                    demoComponent.currentProp = gmodProp;
+                    demoComponent.currentPropImage.sprite = gmodProp.icon;
+                }
+
+            }
+            public void OnPointerClick(PointerEventData eventData)
+            {
+                JustDoIt();
+            }
+        }
+        public class GmodPropThusterComponent : MonoBehaviour
+        {
+            public InputBankTest inputBank;
+            public Rigidbody rigidbody;
+            public ParticleSystem particleSystem;
+            public void Awake()
+            {
+                rigidbody = GetComponent<Rigidbody>();
+                particleSystem = transform.GetChild(0).gameObject.GetComponent<ParticleSystem>();
+            }
+            public void FixedUpdate()
+            {
+                if (inputBank)
+                {
+                    bool emitEffect = false;
+                    if (inputBank.rawMoveUp.down)
+                    {
+                        rigidbody.AddForce(transform.rotation.eulerAngles.normalized * 30f, ForceMode.Acceleration);
+                    }
+                    if (inputBank.rawMoveDown.down)
+                    {
+                        rigidbody.AddForce(transform.rotation.eulerAngles.normalized * -30f, ForceMode.Acceleration);
+                    }
+                    if (particleSystem && emitEffect)
+                    {
+                        particleSystem.enableEmission = true;
+                    }
+                    else if(particleSystem)
+                    {
+                        particleSystem.enableEmission = false;
+                    }
                 }
             }
         }
@@ -3186,6 +3342,7 @@ namespace Demolisher
         public static SkillDef HookLauncherSkillDef;
         public static SkillDef NukeLauncherSkillDef;
         public static SkillDef BombLauncherSkillDef;
+        public static SkillDef ToolgunSkillDef;
         public static SkillDef StickyLauncherSkillDef;
         public static DemoStickyClass StickyLauncherObject;
         public static SkillDef JumperLauncherSkillDef;
@@ -3483,6 +3640,7 @@ namespace Demolisher
 
             //QuickiebombLauncherSkillDef = GrenadeLauncherInit(typeof(QuickiebombLauncher), "DEMOMAN_QUICKIEBOMBLAUNCHER_NAME", "DEMOMAN_QUICKIEBOMBLAUNCHER_DESC", true, 4, 1, 1);
             MineLayerSkillDef = GrenadeLauncherInit(typeof(MineLayer), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoMineSkillIcon.png"), "DemoMineLayer", "DEMOMAN_MINELAYER_NAME", "DEMOMAN_MINELAYER_DESC", new string[] { "DEMOMAN_MINELAYER_KEY" }, true, 8, 1, 1);
+            //ToolgunSkillDef = GrenadeLauncherInit(typeof(ToolGun), null, "DemoToolgun", "DEMOMAN_TOOLGUN_NAME", "DEMOMAN_TOOLGUN_DESC", new string[] { "DEMOMAN_TOOLGUN_KEY" }, false, 1, 0f, 1, 1, 0);
             LanguageAPI.Add("DEMOMAN_MINELAYER_NAME", "Mine Layer");
             GrenadeLauncher mineDesc = new MineLayer();
             LanguageAPI.Add("DEMOMAN_MINELAYER_DESC", "Fires a sticky trap with remote and proximity detonation that sticks on impact for " + LanguagePrefix((mineDesc.damage * 100).ToString() + "%", LanguagePrefixEnum.Damage) + " damage.");
@@ -5248,7 +5406,7 @@ namespace Demolisher
                 {
                     if (isAuthority)
                     {
-                        specialStickySpiner.FireProjectile(projectile, base.damageStat, RollCrit(), gameObject);
+                        specialStickySpiner.FireProjectile(projectile, base.damageStat * damage, RollCrit(), gameObject);
                     }
                     Util.PlaySound(DemoGrenadeShootSound.playSoundString, gameObject);
                     PlayAnimation("Gun, Override", "ShootGun");
@@ -6222,6 +6380,30 @@ namespace Demolisher
             {
                 base.Update();
                 
+            }
+        }
+        public class ToolGun : BaseState
+        {
+            public DemoComponent demoComponent;
+            public override void OnEnter()
+            {
+                base.OnEnter();
+                demoComponent = GetComponent<DemoComponent>();
+                if (demoComponent && demoComponent.currentProp != null)
+                {
+                    RaycastHit hit = new RaycastHit();
+                    if (Physics.Raycast(inputBank.aimOrigin, inputBank.aimDirection, out hit, 9999f, LayerIndex.world.mask, QueryTriggerInteraction.UseGlobal))
+                    {
+                        GameObject placedObject = GameObject.Instantiate(demoComponent.currentProp.gameObject);
+                        placedObject.transform.position = hit.point;
+                        if (demoComponent.currentProp.placeObjectDelegate != null)
+                        {
+                            demoComponent.currentProp.placeObjectDelegate(placedObject, hit.collider, hit, gameObject);
+                        }
+                        
+                    }
+                }
+                outer.SetNextStateToMain();
             }
         }
         public class ChangeWeapons : BaseState
