@@ -45,6 +45,7 @@ namespace Demolisher
 {
     [BepInPlugin(ModGuid, ModName, ModVer)]
     [BepInDependency(R2API.R2API.PluginGUID, R2API.R2API.PluginVersion)]
+    [BepInDependency(R2API.Networking.NetworkingAPI.PluginGUID)]
     [BepInDependency(BodyModelAdditionsAPI.Main.ModGuid, BepInDependency.DependencyFlags.HardDependency)]
     [BepInDependency("com.weliveinasociety.CustomEmotesAPI", BepInDependency.DependencyFlags.SoftDependency)]
     [NetworkCompatibility(CompatibilityLevel.EveryoneMustHaveMod, VersionStrictness.EveryoneNeedSameModVersion)]
