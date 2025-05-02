@@ -20,6 +20,9 @@
 		<Reference Include="Brynzananas-BodyModelAdditionsAPI">
 			<HintPath>D:\r2modman\RiskOfRain2\profiles\my_mod\BepInEx\plugins\BrynzaSkinsAPI\Debug\netstandard2.1\BodyModelAdditionsAPI.dll</HintPath>
 		</Reference>
+		<Reference Include="Brynzananas-NetworkConfigsAPI">
+			<HintPath>D:\r2modman\RiskOfRain2\profiles\my_mod\BepInEx\plugins\NetworkedConfigs\Debug\netstandard2.1\NetworkConfigsAPI.dll</HintPath>
+		</Reference>
 	</ItemGroup>
 
 </Project>

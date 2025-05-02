@@ -34,6 +34,10 @@ using R2API.Networking.Interfaces;
 using R2API.Networking;
 using HG;
 using UnityEngine.EventSystems;
+using BepInEx.Configuration;
+using RiskOfOptions;
+using RiskOfOptions.Options;
+using static NetworkConfigs.Main;
 [assembly: SecurityPermission(SecurityAction.RequestMinimum, SkipVerification = true)]
 [assembly: HG.Reflection.SearchableAttribute.OptIn]
 [assembly: HG.Reflection.SearchableAttribute.OptInAttribute]
@@ -46,6 +50,7 @@ namespace Demolisher
     [BepInDependency(R2API.R2API.PluginGUID, R2API.R2API.PluginVersion)]
     [BepInDependency(R2API.Networking.NetworkingAPI.PluginGUID)]
     [BepInDependency(BodyModelAdditionsAPI.Main.ModGuid, BepInDependency.DependencyFlags.HardDependency)]
+    [BepInDependency(NetworkConfigs.Main.ModGuid, BepInDependency.DependencyFlags.HardDependency)]
     [BepInDependency("com.weliveinasociety.CustomEmotesAPI", BepInDependency.DependencyFlags.SoftDependency)]
     [NetworkCompatibility(CompatibilityLevel.EveryoneMustHaveMod, VersionStrictness.EveryoneNeedSameModVersion)]
     //[R2APISubmoduleDependency(nameof(CommandHelper))]
@@ -57,20 +62,26 @@ namespace Demolisher
         public const string ModVer = "1.0.4";
 
         private static bool emotesEnabled;
-        public static PluginInfo PInfo { get; private set; }
+        public static BepInEx.PluginInfo PInfo { get; private set; }
         public static AssetBundle ThunderkitAssets;
         public static Dictionary<string, UnityEngine.Object> assetsDictionary = new Dictionary<string, UnityEngine.Object>();
-        public static Dictionary<string, Type> typeByName = new Dictionary<string, Type>();
         public static Dictionary<string, string> tokenReplace = new Dictionary<string, string>();
         public static List<BuffDef> buffsToTrack = new List<BuffDef>();
         public static Dictionary<int, GameObject> idToEffect = new Dictionary<int, GameObject>();
         public static Dictionary<GameObject, int> effectToId = new Dictionary<GameObject, int>();
+        public static Dictionary<string, string> objectsActualNames = new Dictionary<string, string>();
+        public static Dictionary<string, string> tokenModifications = new Dictionary<string, string>();
+        
+        public static List<string> tokensToModify = new List<string>();
         public static SurvivorDef DemoSurvivorDef;
         public static BodyIndex DemoBodyIndex;
         public static SkinDef DemoDefaultSkin;
+        public static SkinDef DemoNuclearSkin;
+        public static ConfigFile ConfigFile;
         public void Awake()
         {
             PInfo = Info;
+            ConfigFile = Config;
             ThunderkitAssets = AssetBundle.LoadFromFile(System.IO.Path.Combine(System.IO.Path.GetDirectoryName(PInfo.Location), "assetbundles", "demomanpackage"));
             SoundAPI.SoundBanks.Add(System.IO.Path.Combine(System.IO.Path.GetDirectoryName(PInfo.Location), "soundbanks", "Demoman.bnk"));
             foreach (Material material in ThunderkitAssets.LoadAllAssets<Material>())
@@ -96,7 +107,8 @@ namespace Demolisher
                 //ContentAddition.AddSkillFamily(skillFamily);
             }
             emotesEnabled = BepInEx.Bootstrap.Chainloader.PluginInfos.ContainsKey(EmoteCompatAbility.customEmotesApiGUID);
-            CreateGmodAssets();
+            //CreateGmodAssets();
+            CreateConfigs();
             CreateINetMessages();
             CreateAssets();
             CreateSurvivor();
@@ -121,12 +133,69 @@ namespace Demolisher
             On.EntityStates.GenericCharacterMain.HandleMovements += GenericCharacterMain_HandleMovements;
             On.RoR2.MapZone.TryZoneStart += MapZone_TryZoneStart;
             On.RoR2.BodyCatalog.SetBodyPrefabs += BodyCatalog_SetBodyPrefabs;
+            On.RoR2.Language.GetLocalizedStringByToken += Language_GetLocalizedStringByToken;
             ContentManager.collectContentPackProviders += (addContentPackProvider) =>
             {
                 addContentPackProvider(new ContentPacks());
             };
 
         }
+
+        private string Language_GetLocalizedStringByToken(On.RoR2.Language.orig_GetLocalizedStringByToken orig, Language self, string token)
+        {
+            if (tokensToModify.Contains(token))
+            {
+                int i = 0;
+                if (!self.stringsByToken.ContainsKey(token + "_MODIFY"))
+                {
+                    tokensToModify.Remove(token);
+                    string modificatedString = Language.GetString(token);
+                    Debug.Log("Created string: " +  modificatedString);
+                    foreach (var key in tokenModifications)
+                    {
+                        i++;
+                        if (modificatedString.Contains(key.Key))
+                        {
+                            Debug.Log("Turning " + key.Key + " into " + key.Value);
+                            modificatedString = modificatedString.Replace(key.Key, key.Value);
+                        }
+                    }
+                    Debug.Log("Final result: " + modificatedString);
+                    self.stringsByToken.Add(token + "_MODIFY", modificatedString);
+                    tokensToModify.Add(token);
+                }
+                else
+                {
+                    tokensToModify.Remove(token);
+                    string modificatedString = Language.GetString(token);
+                    Debug.Log("Created string: " + modificatedString);
+                    foreach (var key in tokenModifications)
+                    {
+                        i++;
+                        if (modificatedString.Contains(key.Key))
+                        {
+                            Debug.Log("Turning " + key.Key + " into " + key.Value);
+                            modificatedString = modificatedString.Replace(key.Key, key.Value);
+                        }
+                    }
+                    Debug.Log("Final result: " + modificatedString);
+                    self.stringsByToken[token + "_MODIFY"] = modificatedString;
+                    tokensToModify.Add(token);
+                }
+                if (i > 0)
+                {
+                    token += "_MODIFY";
+                    Debug.LogWarning("returning token: " + token);
+                }
+                    
+            }
+            return orig(self, token);
+        }
+
+        private void CreateConfigs()
+        {
+        }
+       
 
         private void BodyCatalog_SetBodyPrefabs(On.RoR2.BodyCatalog.orig_SetBodyPrefabs orig, GameObject[] newBodyPrefabs)
         {
@@ -216,7 +285,7 @@ namespace Demolisher
             }
             public RemoveComponentFromNetworkObjectNetMessage()
             {
-
+                
             }
             public void Deserialize(NetworkReader reader)
             {
@@ -1128,8 +1197,36 @@ namespace Demolisher
             gameObject.transform.rotation = Quaternion.LookRotation(raycastHit.normal * -1);
             gameObject.GetComponent<GmodPropThusterComponent>().inputBank = owner.GetComponent<InputBankTest>();
         }
-
-        private static void CreateAssets()
+        public const string StickyLauncherName = "Sticky Launcher";
+        public static NetworkConfig<float> StickyLauncherDamage;
+        public static NetworkConfig<float> StickyLauncherFireRate;
+        public static NetworkConfig<float> StickyLauncherChargeTime;
+        public const string JumperLauncherName = "Jumper Launcher";
+        public const string PillLauncherName = "Pill Launcher";
+        public const string RocketLauncherName = "Rocket Launcher";
+        public const string HookLauncherName = "Hook Launcher";
+        public const string NukeLauncherName = "Nuke Launcher";
+        public const string BombLauncherName = "Bomb Launcher";
+        public const string AntigravLauncherName = "Antigrav Launcher";
+        public const string MineLayerName = "Mine Layer";
+        public const string SkullcutterName = "Skullcutter";
+        public const string ZatoichiName = "Zatoichi";
+        public const string CaberName = "Caber";
+        public const string EyelanderName = "Eyelander";
+        public const string HeavyShieldName = "Heavy Shield";
+        public const string LightShieldName = "Light Shield";
+        public const string WhirlwindName = "Whirlwind";
+        public const string HitstormName = "Hit storm";
+        public const string SlamName = "Slam";
+        public const string HeavySmashName = "Heavy Smash";
+        public const string DamageName = "Damage";
+        public const string FireRateName = "Fire Rate";
+        public const string StocksName = "Base Max Stocks";
+        public const string ReloadTimeName = "Reload Time";
+        public const string StocksToReloadName = "Stocks to Reload";
+        public const string StocksToConsume = "Stocks to Consume";
+        public const string BlastRadiusName = "Blast Radius";
+        private void CreateAssets()
         {
             Main.ExtraCritChance = Main.AddBuff("ExtraCritChance", true, false, false, false, false, ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Buffs/DemoSkullcutterBuff.png"));//, RoR2Content.Buffs.FullCrit.iconSprite);
             Main.HealOnKill = Main.AddBuff("HealOnKill", false, false, false, true, false);//, RoR2Content.Buffs.HealingDisabled.iconSprite);
@@ -1166,37 +1263,46 @@ namespace Demolisher
             List<GameObject> projectiles = new List<GameObject>();
             Main.PillProjectile = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/Projectiles/Pill/PillProjectile.prefab");
             projectiles.Add(Main.PillProjectile);
+            objectsActualNames.Add(PillProjectile.name, PillLauncherName);
             RocketProjectile = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/Projectiles/Rocket/RocketProjectile.prefab");
             //RocketProjectile.AddComponent<RotateToVelocity>();
             projectiles.Add(Main.RocketProjectile);
+            objectsActualNames.Add(RocketProjectile.name, RocketLauncherName);
             HookProjectile = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/Projectiles/Hook/HookProjectile.prefab");
             //HookProjectile.AddComponent<RotateToVelocity>();
             var hookComponent = HookProjectile.AddComponent<HookComponent>();
             //hookComponent.seekerState = (typeof(HookLauncher));
             projectiles.Add(Main.HookProjectile);
+            objectsActualNames.Add(HookProjectile.name, HookLauncherName);
             NukeProjectile = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/Projectiles/Nuke/NukeProjectile.prefab");
             //NukeProjectile.AddComponent<RotateToVelocity>();
             //NukeProjectile.AddComponent<NukeComponent>();
             projectiles.Add(Main.NukeProjectile);
+            objectsActualNames.Add(NukeProjectile.name, NukeLauncherName);
             BombProjectile = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/Projectiles/Bomb/BombProjectile.prefab");
             projectiles.Add(Main.BombProjectile);
             BombProjectile.AddComponent<BombComponent>();
+            objectsActualNames.Add(BombProjectile.name, BombLauncherName);
             Main.StickyProjectile = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/Projectiles/Stickybomb/StickybombProjectile.prefab");
             StickyProjectile.AddComponent<DefaultSticky>();
             projectiles.Add(Main.StickyProjectile);
+            objectsActualNames.Add(StickyProjectile.name, StickyLauncherName);
             Main.JumperProjectile = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/Projectiles/JumperStickybomb 1/JumperStickybombProjectile.prefab");
             JumperProjectile.AddComponent<DefaultSticky>();
             var jumperComponent = JumperProjectile.AddComponent<DemoExplosionComponent>();
             jumperComponent.enemyPower = 7f;
             jumperComponent.selfPower = 10f;
             projectiles.Add(Main.JumperProjectile);
+            objectsActualNames.Add(JumperProjectile.name, JumperLauncherName);
             Main.AntigravProjectile = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/Projectiles/AntigravityStickyBomb/AntigravityStickyBombProjectile.prefab");
             projectiles.Add(Main.AntigravProjectile);
             AntigravProjectile.AddComponent<AntigravSticky>();
+            objectsActualNames.Add(AntigravProjectile.name, AntigravLauncherName);
             Main.MineProjectile = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/Projectiles/Mine/MineProjectile.prefab");
             projectiles.Add(Main.MineProjectile);
             MineProjectile.AddComponent<Mine>();
             MineProjectile.transform.GetChild(0).gameObject.AddComponent<MineDetector>();
+            objectsActualNames.Add(MineProjectile.name, MineLayerName);
             GameObject explosionVFX = Addressables.LoadAssetAsync<GameObject>("RoR2/Base/Toolbot/OmniExplosionVFXToolbotQuick.prefab").WaitForCompletion();
             foreach (GameObject projectile in projectiles)
             {
@@ -1227,8 +1333,38 @@ namespace Demolisher
                 DemoExplosionComponent rocketjumpComponent = projectile.GetComponent<DemoExplosionComponent>();
                 if (!rocketjumpComponent && projectileImpactExplosion)
                 {
-                    projectile.AddComponent<DemoExplosionComponent>();
+                    rocketjumpComponent = projectile.AddComponent<DemoExplosionComponent>();
                 }
+                if (rocketjumpComponent)
+                {
+                    string key = GenerateReplacement(objectsActualNames[projectile.name], BlastRadiusName);
+                    NetworkConfig<float> blastRadiusConfig = CreateConfig<float>(ConfigFile, objectsActualNames[projectile.name], BlastRadiusName, projectileImpactExplosion.blastRadius, "");
+                    blastRadiusConfig.OnConfigApplied = UpdateConfig;
+                    rocketjumpComponent.blastRadiusConfigId = blastRadiusConfig.id;
+                    
+                    if (tokenModifications.ContainsKey(key))
+                    {
+                        tokenModifications[key] = blastRadiusConfig.Value.ToString();
+                    }
+                    else
+                    {
+                        tokenModifications.Add(key, blastRadiusConfig.Value.ToString());
+                    }
+                    void UpdateConfig(int id, INetworkConfig networkConfig)
+                    {
+                        Debug.Log("Updating key: " + key);
+                        Debug.Log("To value: " + blastRadiusConfig.Value);
+                        if (tokenModifications.ContainsKey(key))
+                        {
+                            tokenModifications[key] = blastRadiusConfig.Value.ToString();
+                        }
+                        else
+                        {
+                            tokenModifications.Add(key, blastRadiusConfig.Value.ToString());
+                        }
+                    }
+                }
+                
                 ProjectileController projectileController = projectile.GetComponent<ProjectileController>();
                 projectileController.allowPrediction = false;
                 ContentPacks.networkPrefabs.Add(projectile);
@@ -1241,6 +1377,7 @@ namespace Demolisher
         {
             DemoBody = Main.ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/DemolisherBody.prefab");
             DemoDefaultSkin = Main.ThunderkitAssets.LoadAsset<SkinDef>("Assets/Demoman/DemoDefaultSkin.asset");
+            DemoNuclearSkin = Main.ThunderkitAssets.LoadAsset<SkinDef>("Assets/Demoman/DemoNuclearSkin.asset");
             LanguageAPI.Add("DEMOLISHER_BODY_NAME", "Demolisher");
             LanguageAPI.Add("DEMO_SKIN_DEFAULT", "Default");
             LanguageAPI.Add("DEMOLISHER_BODY_SUBTITLE", "Reborn Demon");
@@ -1250,7 +1387,7 @@ namespace Demolisher
                 "<style=cSub>\r\n\r\n< ! > Passive allows Demolisher for harmless landing. His explosives have knockback that can be used as a quick position relocation. Holding jump button will redirect knockback force to face your aim direction." +
                 "\r\n\r\n< ! > Swords have a small radius of attack, so you mast aim at the target you want to hit. They compensate it with their high burst damage and strong effects. Swords recharge 25% of Utility charge on hit." +
                 "\r\n\r\n< ! > In ranged style swords are replaced with trap bomb launchers. On impact they stick to the surface and wait for user input for detonation signal. After a while they fully arm, gaining additional damage and blast radius." +
-                "\r\n\r\n< ! > Grenades are awailable for both styles and are a quick way of dealing with targets on distance." +
+                "\r\n\r\n< ! > Grenades are available for both styles and are a quick way of dealing with targets on distance." +
                 "\r\n\r\n< ! > Shield charge is a great movement skill while also having attack capabilities of increasing sword damage. Shield charge is cancelled upon sword attack, but retains damage increase for a short time." +
                 "\r\n\r\n< ! > In ranged style shield charge is replaced with traps detonation. Traps require time to be armed for detonation and have time before explosion after detonation request." +
                 "\r\n\r\n< ! > Specials can utilise primary selection and base their effects from them.");
@@ -1296,6 +1433,31 @@ namespace Demolisher
                 }
 
             }
+            ModelPartInfo modelPartInfo2 = new ModelPartInfo
+            {
+                bodyName = "DemolisherBody",
+                gameObject = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/ChestDistorionSmokes.prefab"),
+                codeAfterApplying = IncreaseSize,
+                modelPartOverride = DemoSmokes,
+                inputString = "LowerChest",
+                skinDef = DemoNuclearSkin,
+            };
+            new ModelPart(modelPartInfo2);
+            void IncreaseSize(GameObject gameObject, ChildLocator childLocator, CharacterModel characterModel, ActivePartsComponent activePartsComponent)
+            {
+                if (characterModel)
+                {
+                    //NuclearSizeIncreaseComponent nuclearSizeIncreaseComponent = characterModel.GetComponent<NuclearSizeIncreaseComponent>();
+                    if (true)
+                    {
+                        characterModel.transform.localScale += OneVector(0.35f);
+                        NuclearSizeIncreaseComponent nuclearSizeIncreaseComponent2 = characterModel.gameObject.AddComponent<NuclearSizeIncreaseComponent>();
+                        activePartsComponent.components.Add(nuclearSizeIncreaseComponent2);
+                    }
+                }
+                
+                
+            }
             bodies.Add(DemoBody);
             DemoSurvivorDef = Main.ThunderkitAssets.LoadAsset<SurvivorDef>("Assets/Demoman/DemoSurvivor.asset");
             survivors.Add(DemoSurvivorDef);
@@ -1303,9 +1465,15 @@ namespace Demolisher
             {
                 EmoteCompatAbility.EmoteCompatability();
             }
-
+            
         }
-
+        public class NuclearSizeIncreaseComponent : MonoBehaviour
+        {
+            public void OnDestroy()
+            {
+                transform.localScale -= OneVector(0.35f);
+            }
+        }
         public static DemoSoundClass DemoChargeHitFleshSound = new DemoSoundClass("DemoChargeFleshHit");
         public static DemoSoundClass DemoChargeWindUpSound = new DemoSoundClass("DemoChargeWindUp");
         public static DemoSoundClass DemoChargeWorldHitSound = new DemoSoundClass("DemoChargeWorldHit");
@@ -1599,6 +1767,10 @@ namespace Demolisher
             }
             
         }
+        public static string GenerateReplacement(string name1, string name2)
+        {
+            return "{" + (name1 + name2).Replace(" ", "").ToLower() + "}";
+        }
         public class HitHelper : MonoBehaviour
         {
             private TeamFilter filter;
@@ -1620,7 +1792,37 @@ namespace Demolisher
             }
 
         }
-
+        public class DemoConfigProjectile : MonoBehaviour
+        {
+            public Rigidbody rigidbody;
+            public ProjectileExplosion projectileExplosion;
+            public DemoExplosionComponent explosionComponent;
+            public ProjectileSimple projectileSimple;
+            public int blastRadiusConfigId;
+            public int selfKnockbackConfigId;
+            public int enemyKnockbackConfigId;
+            public int armTimeConfigId;
+            public int fullArmTimeConfigId;
+            public int blastRadiusIncreaseConfigId;
+            public int damageIncreaseConfigId;
+            public int speedConfigId;
+            public int grabityConfigId;
+            public void Awake()
+            {
+                rigidbody = GetComponent<Rigidbody>();
+                projectileExplosion = GetComponent<ProjectileExplosion>();
+                explosionComponent = GetComponent<DemoExplosionComponent>();
+                projectileSimple = GetComponent<ProjectileSimple>();
+                if (rigidbody)
+                {
+                    rigidbody.useGravity = (networkConfigs[grabityConfigId] as NetworkConfig<bool>).Value;
+                }
+                if (projectileExplosion)
+                {
+                    projectileExplosion.blastRadius = (networkConfigs[blastRadiusConfigId] as NetworkConfig<float>).Value;
+                }
+            }
+        }
 
         public class DemoExplosionComponent : MonoBehaviour
         {
@@ -1638,6 +1840,9 @@ namespace Demolisher
             private Rigidbody rigidbody;
             private ProjectileController projectileController;
             private CharacterBody ownerBody;
+            public int blastRadiusConfigId;
+            public int selfKnockbackConfigId;
+            public int enemyKnockbackConfigId;
 
             public void Start()
             {
@@ -1645,6 +1850,9 @@ namespace Demolisher
                 owner = projectileController ? projectileController.owner : null;
                 explosion = GetComponent<ProjectileExplosion>();
                 if (!explosion) Destroy(this);
+                explosion.blastRadius = (networkConfigs[blastRadiusConfigId] as NetworkConfig<float>).Value;
+                selfPower = (networkConfigs[selfKnockbackConfigId] as NetworkConfig<float>).Value;
+                enemyPower = (networkConfigs[selfKnockbackConfigId] as NetworkConfig<float>).Value;
                 teamFilter = GetComponent<TeamFilter>();
                 rigidbody = GetComponent<Rigidbody>();
                 ownerBody = owner ? owner.GetComponent<CharacterBody>() : null;
@@ -3325,6 +3533,7 @@ namespace Demolisher
         public static ModelPart DefaultSwordSkin;
         public static SkillDef SkullcutterSkillDef;
         public static ModelPart SkullcutterSwordSkin;
+        public static ModelPart SkullcutterNuclearSwordSkin;
         public static DemoSwordClass Skullcutter;
         public static SkillDef ZatoichiSkillDef;
         public static ModelPart ZatoichiSwordSkin;
@@ -3366,9 +3575,11 @@ namespace Demolisher
         public static SkillDef ManthreadsSkillDef;
         public static SkillDef HeavyShieldSkillDef;
         public static ModelPart HeavyShieldSkin;
+        public static ModelPart HeavyShieldNuclearSkin;
         public static DemoShieldClass HeavyShield;
         public static SkillDef LightShieldSkillDef;
         public static ModelPart LightShieldSkin;
+        public static ModelPart LightShieldNuclearSkin;
         public static DemoShieldClass LightShield;
         public static SkillDef SpaceShieldSkillDef;
         public static List<SkillDef> stickySkills = new List<SkillDef>();
@@ -3479,6 +3690,7 @@ namespace Demolisher
                 }
                 return BulletAttack.DefaultHitCallbackImplementation(bulletAttack, ref hitInfo);
             }
+            objectsActualNames.Add("DemoSkullcutter", SkullcutterName);
             SkullcutterSkillDef = SwordInit(Skullcutter, typeof(DemoSword), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoSkullcutterSkillIcon.png"), "DemoSkullcutter", "DEMOMAN_SKULLCUTTER_NAME", "DEMOMAN_SKULLCUTTER_DESC", new string[] { "DEMOMAN_SKULLCUTTER_KEY" });
             LanguageAPI.Add("DEMOMAN_SKULLCUTTER_NAME", "Skullcutter");
             LanguageAPI.Add("DEMOMAN_SKULLCUTTER_DESC", "Swing Skullcutter for " + LanguagePrefix((Skullcutter.bulletAttack.damage * 100).ToString() + "% damage", LanguagePrefixEnum.Damage) +". Deal " + LanguagePrefix("240% extra damage", LanguagePrefixEnum.Damage) + " on first hit and increase " + LanguagePrefix("crit chance", LanguagePrefixEnum.Damage) + " by " + LanguagePrefix("10%", LanguagePrefixEnum.Damage) + " on sequential hits.");
@@ -3516,6 +3728,7 @@ namespace Demolisher
                 }
                 return BulletAttack.DefaultHitCallbackImplementation(bulletAttack, ref hitInfo);
             }
+            objectsActualNames.Add("DemoZatoichi", ZatoichiName);
             ZatoichiSkillDef = SwordInit(Zatoichi, typeof(DemoSword), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoZatoichiSkillIcon.png"), "DemoZatoichi", "DEMOMAN_ZATOICHI_NAME", "DEMOMAN_ZATOICHI_DESC", new string[] { "DEMOMAN_ZATOICHI_KEY" });
             LanguageAPI.Add("DEMOMAN_ZATOICHI_NAME", "Zatoichi");
             LanguageAPI.Add("DEMOMAN_ZATOICHI_DESC", "Swing Zatoichi for " + LanguagePrefix((Zatoichi.bulletAttack.damage * 100).ToString() + "% damage", LanguagePrefixEnum.Damage) + ". " + LanguagePrefix("Heal", LanguagePrefixEnum.Healing) + " on hit and kill.");
@@ -3590,6 +3803,7 @@ namespace Demolisher
                     return check;
                 }
             }
+            objectsActualNames.Add("DemoCaber", CaberName);
             CaberSkillDef = SwordInit(Caber, typeof(DemoSword), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoCaberSkillIcon.png"), "DemoCaber", "DEMOMAN_CABER_NAME", "DEMOMAN_CABER_DESC", new string[] { "DEMOMAN_CABER_KEY" }, requiredStock: 0, rechargeInterval: 6f, stockToConsume: 0, baseStock: 1); ;
             LanguageAPI.Add("DEMOMAN_CABER_NAME", "Caber");
             LanguageAPI.Add("DEMOMAN_CABER_DESC", "Swing Caber for " + LanguagePrefix((Caber.bulletAttack.damage * 100).ToString() + "% damage", LanguagePrefixEnum.Damage) + ". Produce a strong " + LanguagePrefix("explosion", LanguagePrefixEnum.Damage) + " on hit.");
@@ -3621,6 +3835,7 @@ namespace Demolisher
                 }
                 return BulletAttack.DefaultHitCallbackImplementation(bulletAttack, ref hitInfo);
             }
+            objectsActualNames.Add("DemoEyelander", EyelanderName);
             EyelanderSkillDef = SwordInit(Eyelander, typeof(DemoSword), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoEyelanderSkillIcon.png"), "DemoEyelander", "DEMOMAN_EYELANDER_NAME", "DEMOMAN_EYELANDER_DESC", new string[] { "DEMOMAN_EYELANDER_KEY" });
             LanguageAPI.Add("DEMOMAN_EYELANDER_NAME", "Eyelander");
             LanguageAPI.Add("DEMOMAN_EYELANDER_DESC", "Swing Eyelander for " + LanguagePrefix((Eyelander.bulletAttack.damage * 100).ToString() + "% damage", LanguagePrefixEnum.Damage) + ". " + LanguagePrefix("Trade", LanguagePrefixEnum.Death) + " " + LanguagePrefix("health", LanguagePrefixEnum.Health) + " and " + LanguagePrefix("damage", LanguagePrefixEnum.Damage) + " for " + LanguagePrefix("boss items gerenarion", LanguagePrefixEnum.Shrine) + ".");
@@ -3628,56 +3843,67 @@ namespace Demolisher
 
             LanguageAPI.Add("DEMOMAN_DEFLECTOR_NAME", "Deflector");
             LanguageAPI.Add("DEMOMAN_DEFLECTOR_DESC", $"Feedbacker.");
+            objectsActualNames.Add("DemoPillLauncher", PillLauncherName);
             PillLauncherSkillDef = GrenadeLauncherInit(typeof(PillLauncher), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoPillSkillIcon.png"), "DemoPillLauncher", "DEMOMAN_PILLLAUNCHER_NAME", "DEMOMAN_PILLLAUNCHER_DESC", new string[] { "DEMOMAN_PILLLAUNCHER_KEY" }, false, 4, 3f, 1, 6, 1);
+            objectsActualNames.Add("DemoRocketLauncher", RocketLauncherName);
             RocketLauncherSkillDef = GrenadeLauncherInit(typeof(RocketLauncher), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoRocketSkillIcon.png"), "DemoRocketLauncher", "DEMOMAN_ROCKETLAUNCHER_NAME", "DEMOMAN_ROCKETLAUNCHER_DESC", new string[] { "DEMOMAN_ROCKETLAUNCHER_KEY" }, false, 3, 3f, 1, 4, 1);
+            objectsActualNames.Add("DemoBombLauncher", BombLauncherName);
             BombLauncherSkillDef = GrenadeLauncherInit(typeof(BombLauncher), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoBombSkillIcon.png"), "DemoBombLauncher", "DEMOMAN_BOMBLAUNCHER_NAME", "DEMOMAN_BOMBLAUNCHER_DESC", new string[] { "DEMOMAN_BOMBLAUNCHER_KEY" }, false, 4, 3f, 1, 6, 1);
             BombProjectile.GetComponent<BombComponent>().seekerState = BombLauncherSkillDef.activationState;
+            objectsActualNames.Add("DemoStickyLauncher", StickyLauncherName);
             StickyLauncherSkillDef = GrenadeLauncherInit(typeof(StickyLauncher), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoStickySkillIcon.png"), "DemoStickyLauncher", "DEMOMAN_STICKYLAUNCHER_NAME", "DEMOMAN_STICKYLAUNCHER_DESC", new string[] { "DEMOMAN_STICKYLAUNCHER_KEY" }, true, 8, 1.1f, 1);
+            objectsActualNames.Add("DemoJumperLauncher", JumperLauncherName);
             JumperLauncherSkillDef = GrenadeLauncherInit(typeof(JumperLauncher), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoJumperStickySkillIcon.png"), "DemoJumperLauncher", "DEMOMAN_JUMPERLAUNCHER_NAME", "DEMOMAN_JUMPERLAUNCHER_DESC", new string[] { "DEMOMAN_JUMPERLAUNCHER_KEY" }, true, 8, 1.1f, 1);
+            objectsActualNames.Add("DemoHookLauncher", HookLauncherName);
             HookLauncherSkillDef = GrenadeLauncherInit(typeof(HookLauncher), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoHookSkillIcon.png"), "DemoHookLauncher", "DEMOMAN_HOOKLAUNCHER_NAME", "DEMOMAN_HOOKLAUNCHER_DESC", new string[] { "DEMOMAN_HOOKLAUNCHER_KEY" }, false, 1, 4f, 1, 1, 1);
             HookProjectile.GetComponent<HookComponent>().seekerState = HookLauncherSkillDef.activationState;
+            objectsActualNames.Add("DemoNukeLauncher", NukeLauncherName);
             //NukeLauncherSkillDef = GrenadeLauncherInit(typeof(NukeLauncher), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoNukeSkillIcon.png"), "DemoNukeLauncher", "DEMOMAN_ROCKETLAUNCHER_NAME", "DEMOMAN_ROCKETLAUNCHER_DESC", false, 1, 60, 1, 1, 1);
 
             //QuickiebombLauncherSkillDef = GrenadeLauncherInit(typeof(QuickiebombLauncher), "DEMOMAN_QUICKIEBOMBLAUNCHER_NAME", "DEMOMAN_QUICKIEBOMBLAUNCHER_DESC", true, 4, 1, 1);
+            objectsActualNames.Add("DemoMineLayer", MineLayerName);
             MineLayerSkillDef = GrenadeLauncherInit(typeof(MineLayer), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoMineSkillIcon.png"), "DemoMineLayer", "DEMOMAN_MINELAYER_NAME", "DEMOMAN_MINELAYER_DESC", new string[] { "DEMOMAN_MINELAYER_KEY" }, true, 8, 1, 1);
             //ToolgunSkillDef = GrenadeLauncherInit(typeof(ToolGun), null, "DemoToolgun", "DEMOMAN_TOOLGUN_NAME", "DEMOMAN_TOOLGUN_DESC", new string[] { "DEMOMAN_TOOLGUN_KEY" }, false, 1, 0f, 1, 1, 0);
             LanguageAPI.Add("DEMOMAN_MINELAYER_NAME", "Mine Layer");
             GrenadeLauncher mineDesc = new MineLayer();
             LanguageAPI.Add("DEMOMAN_MINELAYER_DESC", "Fires a sticky trap with remote and proximity detonation that sticks on impact for " + LanguagePrefix((mineDesc.damage * 100).ToString() + "%", LanguagePrefixEnum.Damage) + " damage.");
-            GenerateGrenadeKeywordToken("DEMOMAN_MINELAYER_KEY", MineProjectile, MineLayerSkillDef, mineDesc, "Mines detonate automatically on enemy contact.");
+            GenerateGrenadeKeywordToken(MineLayerName, "DEMOMAN_MINELAYER_KEY", MineProjectile, MineLayerSkillDef, mineDesc, "Mines detonate automatically on enemy contact.");
+            objectsActualNames.Add("DemoAntigravityBombLauncher", AntigravLauncherName);
             AntigravLauncherSkillDef = GrenadeLauncherInit(typeof(AntigravLauncher), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoAntigravBombSkillIcon.png"), "DemoAntigravityBombLauncher", "DEMOMAN_QUICKIEBOMBLAUNCHER_NAME", "DEMOMAN_QUICKIEBOMBLAUNCHER_DESC", new string[] { "DEMOMAN_QUICKIEBOMBLAUNCHER_KEY" }, true, 4, 1.1f, 1);
             LanguageAPI.Add("DEMOMAN_PILLLAUNCHER_NAME", "Grenade Launcher");
             mineDesc = new PillLauncher();
             LanguageAPI.Add("DEMOMAN_PILLLAUNCHER_DESC", "Fires a rolling projectile for " + LanguagePrefix((mineDesc.damage * 100).ToString() + "%", LanguagePrefixEnum.Damage) + " damage.");
-            GenerateGrenadeKeywordToken("DEMOMAN_PILLLAUNCHER_KEY", PillProjectile, PillLauncherSkillDef, mineDesc, "Grenade Laucnher.");
+            GenerateGrenadeKeywordToken(PillLauncherName, "DEMOMAN_PILLLAUNCHER_KEY", PillProjectile, PillLauncherSkillDef, mineDesc, "Grenade Laucnher.");
             LanguageAPI.Add("DEMOMAN_ROCKETLAUNCHER_NAME", "Rocket Launcher");
             LanguageAPI.Add("DEMOMAN_ROCKETLAUNCHER_DESC", "Fires a explosive projectile for " + LanguagePrefix((mineDesc.damage * 100).ToString() + "%", LanguagePrefixEnum.Damage) + " damage.");
             mineDesc = new RocketLauncher();
-            GenerateGrenadeKeywordToken("DEMOMAN_ROCKETLAUNCHER_KEY", RocketProjectile, RocketLauncherSkillDef, mineDesc, "Rocket Launcher.");
+            GenerateGrenadeKeywordToken(RocketLauncherName,"DEMOMAN_ROCKETLAUNCHER_KEY", RocketProjectile, RocketLauncherSkillDef, mineDesc, "Rocket Launcher.");
             LanguageAPI.Add("DEMOMAN_HOOKLAUNCHER_NAME", "Hook Launcher");
             LanguageAPI.Add("DEMOMAN_HOOKLAUNCHER_DESC", "Fires a fast projectile that sticks on impact and pulls user to itself.");
-            GenerateGrenadeKeywordToken("DEMOMAN_HOOKLAUNCHER_KEY", HookProjectile, HookLauncherSkillDef, mineDesc, "Hook Launcher.");
+            GenerateGrenadeKeywordToken(HookLauncherName,"DEMOMAN_HOOKLAUNCHER_KEY", HookProjectile, HookLauncherSkillDef, mineDesc, "Hook Launcher.");
             //LanguageAPI.Add("DEMOMAN_ROCKETLAUNCHER_DESC", $"Fire your head cannon.");
             LanguageAPI.Add("DEMOMAN_BOMBLAUNCHER_NAME", "Bomb Cannon");
             mineDesc = new BombLauncher();
             LanguageAPI.Add("DEMOMAN_BOMBLAUNCHER_DESC", "Fires a bomb for " + LanguagePrefix((mineDesc.damage * 100).ToString() + "%", LanguagePrefixEnum.Damage) + " damage that deals additional contact damage. Lifetime can be reduced by charging");
-            GenerateGrenadeKeywordToken("DEMOMAN_BOMBLAUNCHER_KEY", BombProjectile, BombLauncherSkillDef, mineDesc, "Bomb Launcher.");
+            GenerateGrenadeKeywordToken(BombLauncherName, "DEMOMAN_BOMBLAUNCHER_KEY", BombProjectile, BombLauncherSkillDef, mineDesc, "Bomb Launcher.");
             //LanguageAPI.Add("DEMOMAN_BOMBLAUNCHER_DESC", $"Fire your head cannon.");
             LanguageAPI.Add("DEMOMAN_STICKYLAUNCHER_NAME", "Sticky Launcher");
             mineDesc = new StickyLauncher();
             LanguageAPI.Add("DEMOMAN_STICKYLAUNCHER_DESC", "Fires a sticky trap with remote detonation that sticks on impact for " + LanguagePrefix((mineDesc.damage * 100).ToString() + "%", LanguagePrefixEnum.Damage) + " damage.");
-            GenerateGrenadeKeywordToken("DEMOMAN_STICKYLAUNCHER_KEY", StickyProjectile, StickyLauncherSkillDef, mineDesc, "Sticky Launcher.");
+            GenerateGrenadeKeywordToken(StickyLauncherName, "DEMOMAN_STICKYLAUNCHER_KEY", StickyProjectile, StickyLauncherSkillDef, mineDesc, "Sticky Launcher.");
             LanguageAPI.Add("DEMOMAN_JUMPERLAUNCHER_NAME", "Jumper Launcher");
             LanguageAPI.Add("DEMOMAN_JUMPERLAUNCHER_DESC", "Fires a sticky trap with remote detonation that sticks on impact. Trades all damage for additional knockback");
-            GenerateGrenadeKeywordToken("DEMOMAN_JUMPERLAUNCHER_KEY", JumperProjectile, JumperLauncherSkillDef, mineDesc, "Jumper Launcher.");
+            GenerateGrenadeKeywordToken(JumperLauncherName, "DEMOMAN_JUMPERLAUNCHER_KEY", JumperProjectile, JumperLauncherSkillDef, mineDesc, "Jumper Launcher.");
             //LanguageAPI.Add("DEMOMAN_STICKYLAUNCHER_DESC", $"Fire your sticky launcher.");
             LanguageAPI.Add("DEMOMAN_QUICKIEBOMBLAUNCHER_NAME", "Antigrav Launcher");
             mineDesc = new AntigravLauncher();
             LanguageAPI.Add("DEMOMAN_QUICKIEBOMBLAUNCHER_DESC", "Fires a bouncing trap with remote detonation that bounces on impact for " + LanguagePrefix((mineDesc.damage * 100).ToString() + "%", LanguagePrefixEnum.Damage) + " damage. Has no gravitation");
-            GenerateGrenadeKeywordToken("DEMOMAN_QUICKIEBOMBLAUNCHER_KEY", AntigravProjectile, AntigravLauncherSkillDef, mineDesc, "Antigrav Launcher.");
+            GenerateGrenadeKeywordToken(AntigravLauncherName,"DEMOMAN_QUICKIEBOMBLAUNCHER_KEY", AntigravProjectile, AntigravLauncherSkillDef, mineDesc, "Antigrav Launcher.");
             //LanguageAPI.Add("DEMOMAN_QUICKIEBOMBLAUNCHER_DESC", $"Fire your quickiebomb launcher.");
+            objectsActualNames.Add("DemoHeavyShield", HeavyShieldName);
             HeavyShieldSkillDef = ShieldChargeInit(typeof(ShieldChargeHeavy), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoHeavyShieldSkillIcon.png"), "DemoHeavyShield", "DEMOMAN_SHIELDHEAVY_NAME", "DEMOMAN_SHIELDHEAVY_DESC", new string[] { "DEMOMAN_SHIELDHEAVY_KEY" });
-            LightShieldSkillDef = ShieldChargeInit(typeof(ShieldChargeLight), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoLightShieldSkillIcon.png"), "DemoHeavyShield", "DEMOMAN_SHIELDLIGHT_NAME", "DEMOMAN_SHIELDLIGHT_DESC", new string[] { "DEMOMAN_SHIELDLIGHT_KEY" });
+            objectsActualNames.Add("DemoLightShield", LightShieldName);
+            LightShieldSkillDef = ShieldChargeInit(typeof(ShieldChargeLight), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoLightShieldSkillIcon.png"), "DemoLightShield", "DEMOMAN_SHIELDLIGHT_NAME", "DEMOMAN_SHIELDLIGHT_DESC", new string[] { "DEMOMAN_SHIELDLIGHT_KEY" });
             //SpaceShield = ShieldChargeInit(typeof(ShieldChargeAntigravity), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoHookSkillIcon.png"), "DemoFlyingShield", "DEMOMAN_SHIELDANTIGRAVITY_NAME", "DEMOMAN_SHIELDANTIGRAVITY_DESC");
             LanguageAPI.Add("DEMOMAN_SHIELDHEAVY_NAME", "Heavy Shield");
             LanguageAPI.Add("DEMOMAN_SHIELDHEAVY_DESC", "Charges user in a straight line with low control. Greatly increases sword damage based on charge stage.");
@@ -3691,10 +3917,13 @@ namespace Demolisher
             //AntigravDetonateSkillDef = AntigravDetonateInit();
             customDetonationSkills.Add(AntigravLauncherSkillDef, LaserTrapDetonateSkillDef);
             SwapSkillDef = Swap(ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoSwapSKillIcon.png"));
-            SpecialOneSkillDef = SpecialInit(typeof(SpecialOneRedirector), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoSpecial1SKillIcon.png"), "DemoSwordTornado", "DEMOMAN_SPECIALONE_NAME", "DEMOMAN_SPECIALONE_DESC", "Extra");
-            SpecialTwoSkillDef = SpecialInit<UltraInstinctSkillDef>(typeof(UltraInstinctRedirector), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoSpecial2SKillIcon.png"), "DemoSwordStorm", "DEMOMAN_SPECIALTWO_NAME", "DEMOMAN_SPECIALTWO_DESC", "Extra", baseStocks: 3, rechargeInterval: 4f);
-            
+            objectsActualNames.Add("DemoWhirlwind", WhirlwindName);
+            SpecialOneSkillDef = SpecialInit(typeof(SpecialOneRedirector), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoSpecial1SKillIcon.png"), "DemoWhirlwind", "DEMOMAN_SPECIALONE_NAME", "DEMOMAN_SPECIALONE_DESC", "Extra");
+            objectsActualNames.Add("DemoHitStorm", HitstormName);
+            SpecialTwoSkillDef = SpecialInit<UltraInstinctSkillDef>(typeof(UltraInstinctRedirector), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoSpecial2SKillIcon.png"), "DemoHitStorm", "DEMOMAN_SPECIALTWO_NAME", "DEMOMAN_SPECIALTWO_DESC", "Extra", baseStocks: 3, rechargeInterval: 4f);
+            objectsActualNames.Add("DemoSlam", SlamName);
             SlamSkillDef = SpecialInit(typeof(Slam), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoSlamSkillIcon.png"), "DemoSlam", "DEMOMAN_SLAM_NAME", "DEMOMAN_SLAM_DESC", "Extra", rechargeInterval: 6f);
+            objectsActualNames.Add("DemoBigAssAttack", HeavySmashName);
             BigAssSwordSkillDef = SpecialInit(typeof(BigAssAttackRedirector), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoSlamSkillIcon.png"), "DemoBigAssAttack", "DEMOMAN_BIGASSATTACK_NAME", "DEMOMAN_BIGASSATTACK_DESC", "Extra");
             //LockInSkillDef = SpecialInit(typeof(LockIn), null, "DemoLockIn", "DEMOMAN_LOCKIN_NAME", "DEMOMAN_LOCKIN_DESC", "Extra");
             LanguageAPI.Add("DEMOMAN_SPECIALONE_NAME", "Whirlwind");
@@ -3794,8 +4023,33 @@ namespace Demolisher
         public static T GrenadeLauncherInit<T>(Type state, Sprite sprite, string name, string nameToken, string descToken, string[] keyWordTokens, bool isSticky = false, int baseStocks = 4, float rechargeInterval = 4f, int requiredStock = 1, int rechargeStock = 1, int stockToConsume = 1) where T : SkillDef
         {
             T skillDef = AddSkill<T>(state, isSticky ? "Weapon" : "Weapon2", sprite, name, nameToken, descToken, keyWordTokens, baseStocks, rechargeInterval, true, false, false, true, InterruptPriority.Any, true, false, requiredStock, rechargeStock, stockToConsume, isSticky ? demoStickyFamily : demoSecondaryFamily, true);
+            CreateConfig<int>(Main.ConfigFile, objectsActualNames[name], StocksName, baseStocks, "", ApplyStocks);
+            CreateConfig<float>(Main.ConfigFile, objectsActualNames[name], ReloadTimeName, rechargeInterval, "", ApplyReloadTime);
+            CreateConfig<int>(Main.ConfigFile, objectsActualNames[name], StocksToConsume, stockToConsume, "", ApplyStocksToConsume);
+            CreateConfig<int>(Main.ConfigFile, objectsActualNames[name], StocksToReloadName, rechargeStock, "", ApplyStocksToReload);
+            void ApplyStocks(int id, INetworkConfig networkConfig)
+            {
+                skillDef.baseMaxStock = (networkConfig as NetworkConfig<int>).Value;
+            }
+            void ApplyReloadTime(int id, INetworkConfig networkConfig)
+            {
+                skillDef.baseRechargeInterval = (networkConfig as NetworkConfig<float>).Value;
+            }
+            void ApplyStocksToConsume(int id, INetworkConfig networkConfig)
+            {
+                skillDef.stockToConsume = (networkConfig as NetworkConfig<int>).Value;
+            }
+            void ApplyStocksToReload(int id, INetworkConfig networkConfig)
+            {
+                skillDef.rechargeStock = (networkConfig as NetworkConfig<int>).Value;
+            }
             if (isSticky) Main.StickySkills.Add(skillDef);
             return skillDef;
+        }
+        public static OnConfigApplied testDelegate = Test;
+        public static void Test(int id, INetworkConfig networkConfig)
+        {
+
         }
         public static SkillDef ShieldChargeInit(Type state, Sprite sprite, string name, string nameToken, string descToken, string[] keywords, int baseStocks = 1, float rechargeInterval = 6f, int requiredStock = 1, int rechargeStock = 1, int stockToConsume = 1)
         {
@@ -3972,14 +4226,6 @@ namespace Demolisher
                 RemoveFromList();
             }
         }
-        public class DemoSkinClass
-        {
-            public DemoSkinClass(SkinDef skinDef, GameObject gameObject)
-            {
-                skins.Add(skinDef, gameObject);
-            }
-            public Dictionary<SkinDef, GameObject> skins = new Dictionary<SkinDef, GameObject> ();
-        }
         public class DemoSwordClass
         {
             public DemoSwordClass(BulletAttack inpuBulletAttack, float inputSwingUpTime = 0.4f, float inpuSwingDownTime = 0.4f)
@@ -3993,9 +4239,8 @@ namespace Demolisher
             public float swingDownTime;
             
         }
-        public class DemoShieldClass(DemoSkinClass shieldSkill)
+        public class DemoShieldClass
         {
-            public DemoSkinClass shieldSkin = shieldSkill;
         }
         public class DemoStickyClass(GameObject stickyObject, GrenadeLauncher stickyState)
         {
@@ -4047,7 +4292,7 @@ namespace Demolisher
             tokenReplace.Add(descToken, token);
 
         }
-        public static void GenerateGrenadeKeywordToken(string token, GameObject projectile, SkillDef skillDef, GrenadeLauncher grenadeLauncher, string before = "", string after = "")
+        public static void GenerateGrenadeKeywordToken(string name, string token, GameObject projectile, SkillDef skillDef, GrenadeLauncher grenadeLauncher, string before = "", string after = "")
         {
             ProjectileImpactExplosion projectileImpactExplosion = projectile.GetComponent<ProjectileImpactExplosion>();
             DemoExplosionComponent demoExplosionComponent = projectile.GetComponent<DemoExplosionComponent>();
@@ -4055,10 +4300,22 @@ namespace Demolisher
             ProjectileSimple projectileSimple = projectile.GetComponent<ProjectileSimple>();
             Rigidbody rigidbody = projectile.GetComponent<Rigidbody>();
             string explosionString = "";
+            string finalString = "";
             if (projectileSimple)
             {
+                string speedKey = GenerateReplacement(name, "Speed");
                 explosionString += "" +
-                    "Speed: " + LanguagePrefix((projectileSimple.desiredForwardSpeed).ToString() + "m/s", LanguagePrefixEnum.Damage) + "\n";
+                    "Speed: " + LanguagePrefix((speedKey).ToString() + "m/s", LanguagePrefixEnum.Damage) + "\n";
+                
+                string speedValue = projectileSimple.desiredForwardSpeed.ToString();
+                if (tokenModifications.ContainsKey(speedKey))
+                {
+                    tokenModifications[speedKey] = speedValue;
+                }
+                else
+                {
+                    tokenModifications.Add(speedKey, speedValue);
+                }
             }
             if (rigidbody)
             {
@@ -4068,9 +4325,19 @@ namespace Demolisher
             if (projectileImpactExplosion)
             {
                 //explosionString += "\n";
+                string blastRadiusKey = GenerateReplacement(name, BlastRadiusName);
                 explosionString += "" +
-                    "Explosion radius: " + LanguagePrefix((projectileImpactExplosion.blastRadius).ToString() + "m", LanguagePrefixEnum.Damage) + "\n" +
+                    "Explosion radius: " + LanguagePrefix((blastRadiusKey).ToString() + "m", LanguagePrefixEnum.Damage) + "\n" +
                     "Projectile lifetime: " + LanguagePrefix((projectileImpactExplosion.lifetime).ToString() + (projectileImpactExplosion.lifetime == float.PositiveInfinity ? "" : "s"), LanguagePrefixEnum.Damage) + "\n";
+                string speedValue = projectileImpactExplosion.blastRadius.ToString();
+                //if (tokenModifications.ContainsKey(blastRadiusKey))
+                //{
+                //    tokenModifications[blastRadiusKey] = speedValue;
+                //}
+                //else
+                //{
+                //    tokenModifications.Add(blastRadiusKey, speedValue);
+                //}
             }
             if (stickyComponent)
             {
@@ -4090,9 +4357,7 @@ namespace Demolisher
                     "Self knockback: " + LanguagePrefix((demoExplosionComponent.selfPower).ToString(), LanguagePrefixEnum.Damage) + "\n" +
                     "";
             }
-
-            LanguageAPI.Add(token, $"" +
-                before +
+            finalString = before +
                 "\n\n" +
                 "Base damage: " + LanguagePrefix((grenadeLauncher.damage * 100).ToString() + "%", LanguagePrefixEnum.Damage) + "\n" +
                 "Fire rate: " + LanguagePrefix((grenadeLauncher.fireRate).ToString() + "s", LanguagePrefixEnum.Damage) + "\n" +
@@ -4100,9 +4365,16 @@ namespace Demolisher
                 "Reload time: " + LanguagePrefix((skillDef.baseRechargeInterval).ToString(), LanguagePrefixEnum.Damage) + "\n" +
                 "Stocks to reload: " + LanguagePrefix((skillDef.rechargeStock).ToString(), LanguagePrefixEnum.Damage) + "\n" +
                 "Charge time: " + LanguagePrefix(grenadeLauncher.canBeCharged ? ((grenadeLauncher.chargeCap).ToString() + "s") : "Can't be charged", LanguagePrefixEnum.Damage) + "\n" +
-                explosionString + (after != "" ? "\n" : "") + after);
+                explosionString + (after != "" ? "\n" : "") + after;
+            LanguageAPI.Add(token, $"" +
+                finalString);
+            tokensToModify.Add(token);
             string descToken = token.Replace("_KEY", "_DESC");
-            tokenReplace.Add(descToken, token);
+            if (!tokenReplace.ContainsKey(descToken))
+            {
+                tokenReplace.Add(descToken, token);
+            }
+            tokensToModify.Add(descToken);
         }
         public static void GenerateShieldKeywordToken(string token, ShieldCharge shieldCharge, string before = "", string after = "")
         {
@@ -4149,6 +4421,7 @@ namespace Demolisher
                 codeAfterApplying = Rotate
             };
             SkullcutterSwordSkin = new ModelPart(modelPartInfo);
+            
             modelPartInfo.gameObject = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/Weapons/Swords/zatoichi.prefab");
             modelPartInfo.skillDef = ZatoichiSkillDef;
             ZatoichiSwordSkin = new ModelPart(modelPartInfo);
@@ -4158,14 +4431,30 @@ namespace Demolisher
             modelPartInfo.gameObject = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/Weapons/Swords/eyelander.prefab");
             modelPartInfo.skillDef = EyelanderSkillDef;
             EyelanderSwordSkin = new ModelPart(modelPartInfo);
+            modelPartInfo.gameObject = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/Weapons/Swords/whip.prefab");
+            modelPartInfo.skillDef = SkullcutterSkillDef;
+            modelPartInfo.modelPartOverride = SkullcutterSwordSkin;
+            modelPartInfo.skinDef = DemoNuclearSkin;
+            SkullcutterNuclearSwordSkin = new ModelPart(modelPartInfo);
             modelPartInfo.gameObject = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/Weapons/Shield/HeavyShield.prefab");
             modelPartInfo.skillDef = HeavyShieldSkillDef;
             modelPartInfo.inputString = "Shield";
             modelPartInfo.codeAfterApplying = null;
+            modelPartInfo.modelPartOverride = null;
+            modelPartInfo.skinDef = null;
             HeavyShieldSkin = new ModelPart(modelPartInfo);
             modelPartInfo.gameObject = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/Weapons/Shield/LightShield.prefab");
             modelPartInfo.skillDef = LightShieldSkillDef;
             LightShieldSkin = new ModelPart(modelPartInfo);
+            modelPartInfo.gameObject = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/Weapons/Shield/HeavyShieldNuclear.prefab");
+            modelPartInfo.skillDef = HeavyShieldSkillDef;
+            modelPartInfo.skinDef = DemoNuclearSkin;
+            modelPartInfo.modelPartOverride = HeavyShieldSkin;
+            HeavyShieldNuclearSkin = new ModelPart(modelPartInfo);
+            modelPartInfo.gameObject = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/Weapons/Shield/LightShieldNuclear.prefab");
+            modelPartInfo.skillDef = LightShieldSkillDef;
+            modelPartInfo.modelPartOverride = LightShieldSkin;
+            LightShieldNuclearSkin = new ModelPart(modelPartInfo);
             void Rotate(GameObject gameObject, ChildLocator childLocator, CharacterModel characterModel, ActivePartsComponent activePartsComponent)
             {
                 gameObject.transform.localEulerAngles = new Vector3(0f, 180f, 0f);
