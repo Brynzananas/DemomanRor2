@@ -194,6 +194,7 @@ namespace Demolisher
 
         private void CreateConfigs()
         {
+            EnableConfig = CreateConfig<bool>(ConfigFile, "Main", "Enable Config", false, "");
         }
        
 
@@ -1197,6 +1198,7 @@ namespace Demolisher
             gameObject.transform.rotation = Quaternion.LookRotation(raycastHit.normal * -1);
             gameObject.GetComponent<GmodPropThusterComponent>().inputBank = owner.GetComponent<InputBankTest>();
         }
+        public static NetworkConfig<bool> EnableConfig;
         public const string StickyLauncherName = "Sticky Launcher";
         public static NetworkConfig<float> StickyLauncherDamage;
         public static NetworkConfig<float> StickyLauncherFireRate;
@@ -1226,6 +1228,16 @@ namespace Demolisher
         public const string StocksToReloadName = "Stocks to Reload";
         public const string StocksToConsume = "Stocks to Consume";
         public const string BlastRadiusName = "Blast Radius";
+        public const string ProjectileLifetimeName = "Projectile Lifetime";
+        public const string ProjectileSpeedName = "Projectile Speed";
+        public const string GravityName = "Affected By Gravity";
+        public const string ArmTimeName = "Arm Time";
+        public const string FullArmTimeName = "Full Arm Time";
+        public const string FullArmTimeBlastRadiusIncreaseName = "Blast Radius Increase";
+        public const string FullArmTimeDamageIncreaseName = "Damage Increase";
+        public const string DetonationTimeName = "Detonation Time";
+        public const string SelfKnockbackName = "Self Knockback";
+        public const string EnemyKnockbackName = "Enemy Knockback";
         private void CreateAssets()
         {
             Main.ExtraCritChance = Main.AddBuff("ExtraCritChance", true, false, false, false, false, ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Buffs/DemoSkullcutterBuff.png"));//, RoR2Content.Buffs.FullCrit.iconSprite);
@@ -1306,11 +1318,26 @@ namespace Demolisher
             GameObject explosionVFX = Addressables.LoadAssetAsync<GameObject>("RoR2/Base/Toolbot/OmniExplosionVFXToolbotQuick.prefab").WaitForCompletion();
             foreach (GameObject projectile in projectiles)
             {
+                DemoConfigProjectile demoConfigProjectile = projectile.AddComponent<DemoConfigProjectile>();
+                string actualName = objectsActualNames[projectile.name];
                 NetworkIdentity networkIdentity = projectile.GetComponent<NetworkIdentity>();
                 if (networkIdentity != null)
                 {
                     networkIdentity.localPlayerAuthority = true;
                     networkIdentity.serverOnly = false;
+                }
+                ProjectileSimple projectileSimple = projectile.GetComponent<ProjectileSimple>();
+                if (projectileSimple != null)
+                {
+                    string projectileSpeedKey = GenerateReplacement(actualName, ProjectileSpeedName);
+                    NetworkConfig<float> projectileSpeedConfig = CreateConfig<float>(ConfigFile, actualName, ProjectileSpeedName, projectileSimple.desiredForwardSpeed, "", enableConfig: EnableConfig);
+                    projectileSpeedConfig.OnConfigApplied = UpdateConfig;
+                    demoConfigProjectile.speedConfigId = projectileSpeedConfig.id;
+                    tokenModifications.ReplaceOrAddValueInDictionary(projectileSpeedKey, projectileSpeedConfig.Value.ToString());
+                    void UpdateConfig(int id, INetworkConfig networkConfig)
+                    {
+                        tokenModifications.ReplaceOrAddValueInDictionary(projectileSpeedKey, projectileSpeedConfig.Value.ToString());
+                    }
                 }
                 ProjectileImpactExplosion projectileImpactExplosion = projectile.GetComponent<ProjectileImpactExplosion>();
                 if (projectileImpactExplosion)
@@ -1319,8 +1346,7 @@ namespace Demolisher
                     {
                         projectileImpactExplosion.impactEffect = explosionVFX;
                     }
-                    
-                    ProjectileSimple projectileSimple = projectile.GetComponent<ProjectileSimple>();
+
                     if (projectileSimple)
                     {
                         projectileSimple.lifetime = float.PositiveInfinity;
@@ -1337,34 +1363,109 @@ namespace Demolisher
                 }
                 if (rocketjumpComponent)
                 {
-                    string key = GenerateReplacement(objectsActualNames[projectile.name], BlastRadiusName);
-                    NetworkConfig<float> blastRadiusConfig = CreateConfig<float>(ConfigFile, objectsActualNames[projectile.name], BlastRadiusName, projectileImpactExplosion.blastRadius, "");
+                    string key = GenerateReplacement(actualName, BlastRadiusName);
+                    NetworkConfig<float> blastRadiusConfig = CreateConfig<float>(ConfigFile, actualName, BlastRadiusName, projectileImpactExplosion.blastRadius, "", enableConfig: EnableConfig);
                     blastRadiusConfig.OnConfigApplied = UpdateConfig;
                     rocketjumpComponent.blastRadiusConfigId = blastRadiusConfig.id;
-                    
-                    if (tokenModifications.ContainsKey(key))
-                    {
-                        tokenModifications[key] = blastRadiusConfig.Value.ToString();
-                    }
-                    else
-                    {
-                        tokenModifications.Add(key, blastRadiusConfig.Value.ToString());
-                    }
+                    tokenModifications.ReplaceOrAddValueInDictionary(key, blastRadiusConfig.Value.ToString());
                     void UpdateConfig(int id, INetworkConfig networkConfig)
                     {
-                        Debug.Log("Updating key: " + key);
-                        Debug.Log("To value: " + blastRadiusConfig.Value);
-                        if (tokenModifications.ContainsKey(key))
-                        {
-                            tokenModifications[key] = blastRadiusConfig.Value.ToString();
-                        }
-                        else
-                        {
-                            tokenModifications.Add(key, blastRadiusConfig.Value.ToString());
-                        }
+                        tokenModifications.ReplaceOrAddValueInDictionary(key, blastRadiusConfig.Value.ToString());
+                    }
+                    string key1 = GenerateReplacement(actualName, SelfKnockbackName);
+                    NetworkConfig<float> selfKnockbackConfig = CreateConfig<float>(ConfigFile, actualName, SelfKnockbackName, rocketjumpComponent.selfPower, "", enableConfig: EnableConfig);
+                    selfKnockbackConfig.OnConfigApplied = UpdateConfig1;
+                    rocketjumpComponent.selfKnockbackConfigId = selfKnockbackConfig.id;
+                    tokenModifications.ReplaceOrAddValueInDictionary(key1, selfKnockbackConfig.Value.ToString());
+                    void UpdateConfig1(int id, INetworkConfig networkConfig)
+                    {
+                        tokenModifications.ReplaceOrAddValueInDictionary(key1, selfKnockbackConfig.Value.ToString());
+                    }
+                    string key2 = GenerateReplacement(actualName, EnemyKnockbackName);
+                    NetworkConfig<float> enemyKnockbackConfig = CreateConfig<float>(ConfigFile, actualName, EnemyKnockbackName, rocketjumpComponent.enemyPower, "", enableConfig: EnableConfig);
+                    enemyKnockbackConfig.OnConfigApplied = UpdateConfig2;
+                    rocketjumpComponent.enemyKnockbackConfigId = enemyKnockbackConfig.id;
+                    tokenModifications.ReplaceOrAddValueInDictionary(key2, enemyKnockbackConfig.Value.ToString());
+                    void UpdateConfig2(int id, INetworkConfig networkConfig)
+                    {
+                        tokenModifications.ReplaceOrAddValueInDictionary(key2, enemyKnockbackConfig.Value.ToString());
+                    }
+                    string key3 = GenerateReplacement(actualName, ProjectileLifetimeName);
+                    NetworkConfig<float> lifeTimeConfig = CreateConfig<float>(ConfigFile, actualName, ProjectileLifetimeName, projectileImpactExplosion.lifetime, "", enableConfig: EnableConfig);
+                    lifeTimeConfig.OnConfigApplied = UpdateConfig2;
+                    rocketjumpComponent.lifeTimeConfigId = lifeTimeConfig.id;
+                    tokenModifications.ReplaceOrAddValueInDictionary(key3, lifeTimeConfig.Value.ToString());
+                    void UpdateConfig3(int id, INetworkConfig networkConfig)
+                    {
+                        tokenModifications.ReplaceOrAddValueInDictionary(key3, lifeTimeConfig.Value.ToString());
                     }
                 }
-                
+                StickyComponent stickyComponent = projectile.GetComponent<StickyComponent>();
+                if (stickyComponent != null)
+                {
+                    GenerateConfigLmao(actualName, ArmTimeName, stickyComponent.armTime, ref stickyComponent.armTimeConfigId);
+                    GenerateConfigLmao(actualName, FullArmTimeName, stickyComponent.fullArmTime, ref stickyComponent.fullArmTimeConfigId);
+                    GenerateConfigLmao(actualName, FullArmTimeDamageIncreaseName, stickyComponent.damageIncrease, ref stickyComponent.damageIncreaseConfigId);
+                    GenerateConfigLmao(actualName, FullArmTimeBlastRadiusIncreaseName, stickyComponent.armTime, ref stickyComponent.armTimeConfigId);
+                    GenerateConfigLmao(actualName, DetonationTimeName, stickyComponent.armTime, ref stickyComponent.armTimeConfigId);
+                    /*string key1 = GenerateReplacement(actualName, ArmTimeName);
+                    NetworkConfig<float> armTimeConfig = CreateConfig<float>(ConfigFile, actualName, ArmTimeName, stickyComponent.armTime, "", enableConfig: EnableConfig);
+                    armTimeConfig.OnConfigApplied = UpdateConfig1;
+                    stickyComponent.armTimeConfigId = armTimeConfig.id;
+                    tokenModifications.ReplaceOrAddValueInDictionary(key1, armTimeConfig.Value.ToString());
+                    void UpdateConfig1(int id, INetworkConfig networkConfig)
+                    {
+                        tokenModifications.ReplaceOrAddValueInDictionary(key1, armTimeConfig.Value.ToString());
+                    }
+                    string key2 = GenerateReplacement(actualName, FullArmTimeName);
+                    NetworkConfig<float> fullArmTimeConfig = CreateConfig<float>(ConfigFile, actualName, FullArmTimeName, stickyComponent.fullArmTime, "", enableConfig: EnableConfig);
+                    fullArmTimeConfig.OnConfigApplied = UpdateConfig2;
+                    stickyComponent.fullArmTimeConfigId = fullArmTimeConfig.id;
+                    tokenModifications.ReplaceOrAddValueInDictionary(key2, fullArmTimeConfig.Value.ToString());
+                    void UpdateConfig2(int id, INetworkConfig networkConfig)
+                    {
+                        tokenModifications.ReplaceOrAddValueInDictionary(key2, fullArmTimeConfig.Value.ToString());
+                    }
+                    string key3 = GenerateReplacement(actualName, FullArmTimeDamageIncreaseName);
+                    NetworkConfig<float> fullArmTimeDamageIncreaseConfig = CreateConfig<float>(ConfigFile, actualName, FullArmTimeDamageIncreaseName, stickyComponent.damageIncrease, "", enableConfig: EnableConfig);
+                    fullArmTimeDamageIncreaseConfig.OnConfigApplied = UpdateConfig3;
+                    stickyComponent.damageIncreaseConfigId = fullArmTimeDamageIncreaseConfig.id;
+                    tokenModifications.ReplaceOrAddValueInDictionary(key3, fullArmTimeDamageIncreaseConfig.Value.ToString());
+                    void UpdateConfig3(int id, INetworkConfig networkConfig)
+                    {
+                        tokenModifications.ReplaceOrAddValueInDictionary(key3, fullArmTimeDamageIncreaseConfig.Value.ToString());
+                    }
+                    string key4 = GenerateReplacement(actualName, FullArmTimeBlastRadiusIncreaseName);
+                    NetworkConfig<float> fullArmTimeBlastRadiusIncreaseConfig = CreateConfig<float>(ConfigFile, actualName, FullArmTimeDamageIncreaseName, stickyComponent.radiusIncrease, "", enableConfig: EnableConfig);
+                    fullArmTimeBlastRadiusIncreaseConfig.OnConfigApplied = UpdateConfig4;
+                    stickyComponent.radiusIncreaseConfigId = fullArmTimeBlastRadiusIncreaseConfig.id;
+                    tokenModifications.ReplaceOrAddValueInDictionary(key4, fullArmTimeBlastRadiusIncreaseConfig.Value.ToString());
+                    void UpdateConfig4(int id, INetworkConfig networkConfig)
+                    {
+                        tokenModifications.ReplaceOrAddValueInDictionary(key4, fullArmTimeBlastRadiusIncreaseConfig.Value.ToString());
+                    }
+                    string key5 = GenerateReplacement(actualName, DetonationTimeName);
+                    NetworkConfig<float> detonationTimeConfig = CreateConfig<float>(ConfigFile, actualName, DetonationTimeName, stickyComponent.detonationTime, "", enableConfig: EnableConfig);
+                    detonationTimeConfig.OnConfigApplied = UpdateConfig5;
+                    stickyComponent.detonationTimeConfigId = detonationTimeConfig.id;
+                    tokenModifications.ReplaceOrAddValueInDictionary(key5, detonationTimeConfig.Value.ToString());
+                    void UpdateConfig5(int id, INetworkConfig networkConfig)
+                    {
+                        tokenModifications.ReplaceOrAddValueInDictionary(key5, detonationTimeConfig.Value.ToString());
+                    }*/
+                }
+                void GenerateConfigLmao<T>(string name1, string name2, T defaultValue, ref int id)
+                {
+                    string key = GenerateReplacement(name1, name2);
+                    NetworkConfig<T> config = CreateConfig<T>(ConfigFile, name1, name2, defaultValue, "", enableConfig: EnableConfig);
+                    config.OnConfigApplied = UpdateConfig;
+                    id = config.id;
+                    tokenModifications.ReplaceOrAddValueInDictionary(key, config.Value.ToString());
+                    void UpdateConfig(int id, INetworkConfig networkConfig)
+                    {
+                        tokenModifications.ReplaceOrAddValueInDictionary(key, config.Value.ToString());
+                    }
+                }
                 ProjectileController projectileController = projectile.GetComponent<ProjectileController>();
                 projectileController.allowPrediction = false;
                 ContentPacks.networkPrefabs.Add(projectile);
@@ -1796,31 +1897,18 @@ namespace Demolisher
         {
             public Rigidbody rigidbody;
             public ProjectileExplosion projectileExplosion;
-            public DemoExplosionComponent explosionComponent;
             public ProjectileSimple projectileSimple;
             public int blastRadiusConfigId;
-            public int selfKnockbackConfigId;
-            public int enemyKnockbackConfigId;
-            public int armTimeConfigId;
-            public int fullArmTimeConfigId;
-            public int blastRadiusIncreaseConfigId;
-            public int damageIncreaseConfigId;
             public int speedConfigId;
             public int grabityConfigId;
             public void Awake()
             {
                 rigidbody = GetComponent<Rigidbody>();
                 projectileExplosion = GetComponent<ProjectileExplosion>();
-                explosionComponent = GetComponent<DemoExplosionComponent>();
                 projectileSimple = GetComponent<ProjectileSimple>();
-                if (rigidbody)
-                {
-                    rigidbody.useGravity = (networkConfigs[grabityConfigId] as NetworkConfig<bool>).Value;
-                }
-                if (projectileExplosion)
-                {
-                    projectileExplosion.blastRadius = (networkConfigs[blastRadiusConfigId] as NetworkConfig<float>).Value;
-                }
+                if (rigidbody) rigidbody.useGravity = (networkConfigs[grabityConfigId] as NetworkConfig<bool>).Value;
+                if (projectileExplosion) projectileExplosion.blastRadius = (networkConfigs[blastRadiusConfigId] as NetworkConfig<float>).Value;
+                if (projectileSimple) projectileSimple.desiredForwardSpeed = (networkConfigs[speedConfigId] as NetworkConfig<float>).Value;
             }
         }
 
@@ -1843,6 +1931,7 @@ namespace Demolisher
             public int blastRadiusConfigId;
             public int selfKnockbackConfigId;
             public int enemyKnockbackConfigId;
+            public int lifeTimeConfigId;
 
             public void Start()
             {
@@ -1853,6 +1942,11 @@ namespace Demolisher
                 explosion.blastRadius = (networkConfigs[blastRadiusConfigId] as NetworkConfig<float>).Value;
                 selfPower = (networkConfigs[selfKnockbackConfigId] as NetworkConfig<float>).Value;
                 enemyPower = (networkConfigs[selfKnockbackConfigId] as NetworkConfig<float>).Value;
+                if (explosion is ProjectileImpactExplosion)
+                {
+                    ProjectileImpactExplosion projectileImpactExplosion = (ProjectileImpactExplosion)explosion;
+                    projectileImpactExplosion.lifetime = (networkConfigs[lifeTimeConfigId] as NetworkConfig<float>).Value;
+                }
                 teamFilter = GetComponent<TeamFilter>();
                 rigidbody = GetComponent<Rigidbody>();
                 ownerBody = owner ? owner.GetComponent<CharacterBody>() : null;
@@ -3004,11 +3098,21 @@ namespace Demolisher
         {
             private float stopwatch = 0f;
             public abstract float armTime { get; }
+            public int armTimeConfigId;
+            private float actualArmTime;
             public abstract float fullArmTime { get; }
+            public int fullArmTimeConfigId;
+            private float actualFullArmTime;
             public abstract float damageIncrease { get; }
+            public int damageIncreaseConfigId;
+            private float actualDamageIncrease;
             public abstract float radiusIncrease { get; }
+            public int radiusIncreaseConfigId;
+            private float actualRadiusIncrease;
             public abstract string stickyName { get; }
             public abstract float detonationTime { get; }
+            public int detonationTimeConfigId;
+            private float actualDetonationTime;
             public abstract int maxStickies { get; }
             private bool armed = false;
             private bool fullyArmed = false;
@@ -3038,7 +3142,7 @@ namespace Demolisher
             {
                 get
                 {
-                    if (stopwatch > armTime + (demoComponent ? demoComponent.additionalArmTime : 0))
+                    if (stopwatch > actualArmTime + (demoComponent ? demoComponent.additionalArmTime : 0))
                     {
                         return true;
                     }
@@ -3052,7 +3156,7 @@ namespace Demolisher
             {
                 get
                 {
-                    if (stopwatch > fullArmTime)
+                    if (stopwatch > actualFullArmTime)
                     {
                         return true;
                     }
@@ -3064,6 +3168,11 @@ namespace Demolisher
             }
             public virtual void OnEnable()
             {
+                actualArmTime = (networkConfigs[armTimeConfigId] as NetworkConfig<float>).Value;
+                actualFullArmTime = (networkConfigs[fullArmTimeConfigId] as NetworkConfig<float>).Value;
+                actualDamageIncrease = (networkConfigs[damageIncreaseConfigId] as NetworkConfig<float>).Value;
+                actualRadiusIncrease = (networkConfigs[radiusIncreaseConfigId] as NetworkConfig<float>).Value;
+                actualDetonationTime = (networkConfigs[detonationTimeConfigId] as NetworkConfig<float>).Value;
                 if (currentList != null)
                 {
                     if (demoComponent && !currentList.Contains(this)) currentList.Add(this);
@@ -3071,6 +3180,7 @@ namespace Demolisher
             }
             public virtual void Start()
             {
+                
                 projectileController = GetComponent<ProjectileController>();
                 rigidbody = GetComponent<Rigidbody>();
                 demoComponent = GetComponent<ProjectileController>().owner.GetComponent<DemoComponent>();
@@ -3105,15 +3215,15 @@ namespace Demolisher
             {
                 if (projectileImpactExplosion)
                 {
-                    projectileImpactExplosion.blastRadius *= radiusIncrease;
+                    projectileImpactExplosion.blastRadius *= actualRadiusIncrease;
                     if (explosionComponent)
                     {
-                        explosionComponent.selfPower /= radiusIncrease;
-                        explosionComponent.enemyPower /= radiusIncrease;
+                        explosionComponent.selfPower /= actualRadiusIncrease;
+                        explosionComponent.enemyPower /= actualRadiusIncrease;
                     }
                 }
                 if (projectileDamage)
-                    projectileDamage.damage *= damageIncrease;
+                    projectileDamage.damage *= actualDamageIncrease;
                 SpawnEffect(fullyArmedVFX, Vector3.zero, true, Quaternion.identity, OneVector(0.6f), transform);
             }
             public List<StickyComponent> GetOrCreateListOfStickies(string listName)
@@ -3130,7 +3240,7 @@ namespace Demolisher
             }
             public void DetonateSticky()
             {
-                DetonateSticky(detonationTime);
+                DetonateSticky(actualDetonationTime);
             }
             public void DetonateSticky(float time)
             {
@@ -4303,33 +4413,24 @@ namespace Demolisher
             string finalString = "";
             if (projectileSimple)
             {
-                string speedKey = GenerateReplacement(name, "Speed");
+                string speedKey = GenerateReplacement(name, ProjectileSpeedName);
                 explosionString += "" +
-                    "Speed: " + LanguagePrefix((speedKey).ToString() + "m/s", LanguagePrefixEnum.Damage) + "\n";
-                
-                string speedValue = projectileSimple.desiredForwardSpeed.ToString();
-                if (tokenModifications.ContainsKey(speedKey))
-                {
-                    tokenModifications[speedKey] = speedValue;
-                }
-                else
-                {
-                    tokenModifications.Add(speedKey, speedValue);
-                }
+                    ProjectileSpeedName + ": " + LanguagePrefix(speedKey + "m/s", LanguagePrefixEnum.Damage) + "\n";
             }
             if (rigidbody)
             {
+                string gravityKey = GenerateReplacement(name, GravityName);
                 explosionString += "" +
-                    "Affected by gravity: " + LanguagePrefix(rigidbody.useGravity ? "True" : "False", LanguagePrefixEnum.Damage) + "\n";
+                    ProjectileSpeedName + ": " + LanguagePrefix(gravityKey, LanguagePrefixEnum.Damage) + "\n";
             }
             if (projectileImpactExplosion)
             {
                 //explosionString += "\n";
                 string blastRadiusKey = GenerateReplacement(name, BlastRadiusName);
+                string lifetimeKey = GenerateReplacement(name, ProjectileLifetimeName);
                 explosionString += "" +
-                    "Explosion radius: " + LanguagePrefix((blastRadiusKey).ToString() + "m", LanguagePrefixEnum.Damage) + "\n" +
-                    "Projectile lifetime: " + LanguagePrefix((projectileImpactExplosion.lifetime).ToString() + (projectileImpactExplosion.lifetime == float.PositiveInfinity ? "" : "s"), LanguagePrefixEnum.Damage) + "\n";
-                string speedValue = projectileImpactExplosion.blastRadius.ToString();
+                    "Explosion radius: " + LanguagePrefix(blastRadiusKey + "m", LanguagePrefixEnum.Damage) + "\n" +
+                    "Projectile lifetime: " + LanguagePrefix(lifetimeKey, LanguagePrefixEnum.Damage) + "\n";
                 //if (tokenModifications.ContainsKey(blastRadiusKey))
                 //{
                 //    tokenModifications[blastRadiusKey] = speedValue;
@@ -4341,22 +4442,30 @@ namespace Demolisher
             }
             if (stickyComponent)
             {
+                string armTimeKey = GenerateReplacement(name, ArmTimeName);
+                string fullArmTimeKey = GenerateReplacement(name, FullArmTimeName);
+                string damageIncreaseKey = GenerateReplacement(name, FullArmTimeDamageIncreaseName);
+                string blastRadiusKey = GenerateReplacement(name, FullArmTimeBlastRadiusIncreaseName);
+                string detonationTimeKey = GenerateReplacement(name, DetonationTimeName);
                 explosionString += "" +
-                    "Can stick: " + LanguagePrefix(stickyComponent.isStickable ? "True" : "False", LanguagePrefixEnum.Damage) + "\n" +
-                    "Arm time: " + LanguagePrefix((stickyComponent.armTime).ToString() + "s", LanguagePrefixEnum.Damage) + "\n" +
-                    "Full arm time: " + LanguagePrefix((stickyComponent.fullArmTime).ToString() + "s", LanguagePrefixEnum.Damage) + "\n" +
-                    "Damage increase: " + LanguagePrefix((stickyComponent.damageIncrease * 100).ToString() + "%", LanguagePrefixEnum.Damage) + "\n" +
-                    "Radius increase: " + LanguagePrefix((stickyComponent.radiusIncrease * 100).ToString() + "%", LanguagePrefixEnum.Damage) + "\n" +
-                    "Detonation time: " + LanguagePrefix((stickyComponent.detonationTime).ToString() + "s", LanguagePrefixEnum.Damage) + "\n" +
+                    "Can Stick: " + LanguagePrefix(stickyComponent.isStickable ? "True" : "False", LanguagePrefixEnum.Damage) + "\n" +
+                    ArmTimeName + ": " + LanguagePrefix(armTimeKey + "s", LanguagePrefixEnum.Damage) + "\n" +
+                    FullArmTimeName + ": " + LanguagePrefix(fullArmTimeKey + "s", LanguagePrefixEnum.Damage) + "\n" +
+                    FullArmTimeDamageIncreaseName + ": " + LanguagePrefix(damageIncreaseKey + "%", LanguagePrefixEnum.Damage) + "\n" +
+                    FullArmTimeBlastRadiusIncreaseName + ": " + LanguagePrefix(blastRadiusKey + "%", LanguagePrefixEnum.Damage) + "\n" +
+                    DetonationTimeName + ": " + LanguagePrefix(detonationTimeKey + "s", LanguagePrefixEnum.Damage) + "\n" +
                     "";
             }
             if (demoExplosionComponent)
             {
+                string enemyKnockbackKey = GenerateReplacement(name, EnemyKnockbackName);
+                string selfKnockbackKey = GenerateReplacement(name, SelfKnockbackName);
                 explosionString += "" +
-                    "Knockback: " + LanguagePrefix((demoExplosionComponent.enemyPower).ToString(), LanguagePrefixEnum.Damage) + "\n" +
-                    "Self knockback: " + LanguagePrefix((demoExplosionComponent.selfPower).ToString(), LanguagePrefixEnum.Damage) + "\n" +
+                    EnemyKnockbackName + ": " + LanguagePrefix(enemyKnockbackKey, LanguagePrefixEnum.Damage) + "\n" +
+                    SelfKnockbackName + ": " + LanguagePrefix(selfKnockbackKey, LanguagePrefixEnum.Damage) + "\n" +
                     "";
             }
+            string baseStocksKey = GenerateReplacement(name, StocksName);
             finalString = before +
                 "\n\n" +
                 "Base damage: " + LanguagePrefix((grenadeLauncher.damage * 100).ToString() + "%", LanguagePrefixEnum.Damage) + "\n" +
@@ -6927,5 +7036,16 @@ public static class Extensions
     public static void AddTimedBuffAuthotiry(this CharacterBody characterBody, BuffIndex buffIndex, int amount, float duration)
     {
         new AddBuffNetMessage(characterBody.netId, buffIndex, amount, duration).Send(NetworkDestination.Server);
+    }
+    public static void ReplaceOrAddValueInDictionary<T1, T2>(this Dictionary<T1, T2> dictionary, T1 key, T2 value)
+    {
+        if (dictionary.ContainsKey(key))
+        {
+            dictionary[key] = value;
+        }
+        else
+        {
+            dictionary.Add(key, value);
+        }
     }
 }
