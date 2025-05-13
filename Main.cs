@@ -40,6 +40,10 @@ using RiskOfOptions.Options;
 using static NetworkConfigs.Main;
 using RoR2.Achievements;
 using Rewired;
+using NetworkConfigs;
+using UnityEngine.Video;
+using static UnityEngine.SendMouseEvents;
+using System.Diagnostics;
 [assembly: SecurityPermission(SecurityAction.RequestMinimum, SkipVerification = true)]
 [assembly: HG.Reflection.SearchableAttribute.OptIn]
 [assembly: HG.Reflection.SearchableAttribute.OptInAttribute]
@@ -71,8 +75,8 @@ namespace Demolisher
         public static Dictionary<string, UnityEngine.Object> assetsDictionary = new Dictionary<string, UnityEngine.Object>();
         public static Dictionary<string, string> tokenReplace = new Dictionary<string, string>();
         public static List<BuffDef> buffsToTrack = new List<BuffDef>();
-        public static Dictionary<int, GameObject> idToEffect = new Dictionary<int, GameObject>();
-        public static Dictionary<GameObject, int> effectToId = new Dictionary<GameObject, int>();
+        public static Dictionary<int, GameObject> idToObject = new Dictionary<int, GameObject>();
+        public static Dictionary<GameObject, int> objectToId = new Dictionary<GameObject, int>();
         public static Dictionary<string, string> objectsActualNames = new Dictionary<string, string>();
         public static Dictionary<string, string> tokenModifications = new Dictionary<string, string>();
         
@@ -143,6 +147,9 @@ namespace Demolisher
             On.RoR2.MapZone.TryZoneStart += MapZone_TryZoneStart;
             On.RoR2.BodyCatalog.SetBodyPrefabs += BodyCatalog_SetBodyPrefabs;
             On.RoR2.Language.GetLocalizedStringByToken += Language_GetLocalizedStringByToken;
+            On.RoR2.UI.SurvivorIconController.Rebuild += SurvivorIconController_Rebuild;
+            On.RoR2.Skills.SkillDef.CanExecute += SkillDef_CanExecute;
+            On.RoR2.PlayerCharacterMasterController.PollButtonInput += PlayerCharacterMasterController_PollButtonInput;
             ContentManager.collectContentPackProviders += (addContentPackProvider) =>
             {
                 addContentPackProvider(new ContentPacks());
@@ -154,6 +161,81 @@ namespace Demolisher
             
         }
 
+        private void PlayerCharacterMasterController_PollButtonInput(On.RoR2.PlayerCharacterMasterController.orig_PollButtonInput orig, PlayerCharacterMasterController self)
+        {
+            if (self.body && self.body.HasBuff(DisablePlayerPollInputs)) return;
+            orig(self);
+        }
+
+        private bool SkillDef_CanExecute(On.RoR2.Skills.SkillDef.orig_CanExecute orig, SkillDef self, GenericSkill skillSlot)
+        {
+            return orig(self, skillSlot);
+        }
+
+        private void SurvivorIconController_Rebuild(On.RoR2.UI.SurvivorIconController.orig_Rebuild orig, SurvivorIconController self)
+        {
+            orig(self);
+            LobbyIconMGGEComponent mGEcomponent = GetComponent<LobbyIconMGGEComponent>();
+            bool destroy = false;
+            if (mGEcomponent != null)
+            {
+            }
+            if (self.survivorDef == DemoSurvivorDef)
+            {
+                if (mGEcomponent == null) mGEcomponent = self.gameObject.AddComponent<LobbyIconMGGEComponent>();
+                HGButton hGButton = self.GetComponent<HGButton>();
+                hGButton.onClick.AddListener(MGE);
+                void MGE()
+                {
+                    mGEcomponent.time ++;
+                    if (mGEcomponent.time >= mGEcomponent.maxTimes)
+                    {
+                        new InstantiateObjectNetMessage(objectToId[MGEEasterEgg], Vector3.zero, Vector3.zero, Vector3.one).Send(NetworkDestination.Clients);
+                        mGEcomponent.time = 0;
+                        mGEcomponent.maxTimes =(int)(mGEcomponent.maxTimes * 1.5f);
+                    }
+                    
+                }
+            }
+            else if(mGEcomponent != null)
+            {
+                destroy = true;
+            }
+            if (destroy) Destroy(mGEcomponent);
+        }
+        public class LobbyIconMGGEComponent : MonoBehaviour
+        {
+            public int time = 0;
+            public int maxTimes = 10;
+
+        }
+        public class MGEcomponent : MonoBehaviour
+        {
+            public RawImage rawImage;
+            public float stopwatch = 0f;
+            public void Awake()
+            {
+                Util.PlaySound(OohSound.playSoundString, RoR2Application.instance.gameObject);
+                rawImage = transform.GetChild(0).GetComponent<RawImage>();
+
+            }
+            public void Update()
+            {
+                stopwatch += Time.unscaledDeltaTime;
+                if (rawImage)
+                {
+                    rawImage.color = new Color(rawImage.color.r, rawImage.color.g, rawImage.color.b, 1 - (stopwatch - 0.2f));
+                    if (rawImage.color.a <= 0)
+                    {
+                        Destroy(gameObject);
+                    }
+                }
+            }
+            public void OnDestroy()
+            {
+                //Util.PlaySound(DontFearSound.playSoundString, RoR2Application.instance.gameObject);
+            }
+        }
         private string Language_GetLocalizedStringByToken(On.RoR2.Language.orig_GetLocalizedStringByToken orig, Language self, string token)
         {
             if (tokensToModify.Contains(token))
@@ -217,6 +299,7 @@ namespace Demolisher
             NetworkingAPI.RegisterMessageType<AddBuffNetMessage>();
             NetworkingAPI.RegisterMessageType<OverhealNetMessage>();
             NetworkingAPI.RegisterMessageType<UngroundNetMessage>();
+            NetworkingAPI.RegisterMessageType<InstantiateObjectNetMessage>();
             NetworkingAPI.RegisterMessageType<SwordEffectNetMessage>();
             NetworkingAPI.RegisterMessageType<AddBodyEffectNetMessage>();
             NetworkingAPI.RegisterMessageType<TimeScaleChangeNetMessage>();
@@ -504,6 +587,55 @@ namespace Demolisher
 
             }
         }
+        public class InstantiateObjectNetMessage : INetMessage
+        {
+            int id;
+            Vector3 position;
+            Vector3 rotation;
+            Vector3 scale;
+            float time;
+            public InstantiateObjectNetMessage(int id, Vector3 position, Vector3 rotation, Vector3 scale, float time = 0f)
+            {
+                this.id = id;
+                this.position = position;
+                this.rotation = rotation;
+                this.scale = scale;
+                this.time = time;
+            }
+            public InstantiateObjectNetMessage()
+            {
+
+            }
+            public void Deserialize(NetworkReader reader)
+            {
+                id = reader.ReadInt32();
+                position = reader.ReadVector3();
+                rotation = reader.ReadVector3();
+                scale = reader.ReadVector3();
+                time = reader.ReadSingle();
+            }
+
+            public void OnReceived()
+            {
+                GameObject gameObject = Instantiate(idToObject[id]);
+                gameObject.transform.position = position;
+                gameObject.transform.eulerAngles = rotation;
+                gameObject.transform.localScale = scale;
+                if (time != 0)
+                {
+                    Destroy(gameObject, time);
+                }
+            }
+
+            public void Serialize(NetworkWriter writer)
+            {
+                writer.Write(id);
+                writer.Write(position);
+                writer.Write(rotation);
+                writer.Write(scale);
+                writer.Write(time);
+            }
+        }
         public class AddBodyEffectNetMessage : INetMessage
         {
             NetworkInstanceId instanceId;
@@ -540,7 +672,7 @@ namespace Demolisher
 
             public void OnReceived()
             {
-                GameObject effectObject = idToEffect[effectId];
+                GameObject effectObject = idToObject[effectId];
                 GameObject characterObject = Util.FindNetworkObject(instanceId);
                 if (!characterObject) return;
                 CharacterBody characterBody = characterObject.GetComponent<CharacterBody>();
@@ -588,7 +720,8 @@ namespace Demolisher
 
             public void OnReceived()
             {
-                Time.timeScale += timeScaleChangeAmount;
+                if (timeScaleChangeAmount < 0) timeScaleChangeAmount = -1 / timeScaleChangeAmount;
+                Time.timeScale *= timeScaleChangeAmount;
             }
 
             public void Serialize(NetworkWriter writer)
@@ -795,7 +928,18 @@ namespace Demolisher
 
         private bool GenericCharacterMain_CanExecuteSkill(On.EntityStates.GenericCharacterMain.orig_CanExecuteSkill orig, GenericCharacterMain self, GenericSkill skillSlot)
         {
-            if (self.characterBody && self.characterBody.HasBuff(DisableInputs)) return false;
+            if (self.characterBody)
+            {
+                if (self.characterBody.HasBuff(DisableInputs)) return false;
+                if (self.skillLocator)
+                {
+                    if (self.skillLocator.primary && self.skillLocator.primary == skillSlot && self.characterBody.HasBuff(DisablePrimary)) return false;
+                    if (self.skillLocator.secondary && self.skillLocator.secondary == skillSlot && self.characterBody.HasBuff(DisableSecondary)) return false;
+                    if (self.skillLocator.utility && self.skillLocator.utility == skillSlot && self.characterBody.HasBuff(DisableUtility)) return false;
+                    if (self.skillLocator.special && self.skillLocator.special == skillSlot && self.characterBody.HasBuff(DisableSpecial)) return false;
+                }
+            }
+            
             return orig(self, skillSlot);
         }
         private void GlobalEventManager_OnHitEnemy(On.RoR2.GlobalEventManager.orig_OnHitEnemy orig, GlobalEventManager self, DamageInfo damageInfo, GameObject victim)
@@ -1037,11 +1181,11 @@ namespace Demolisher
             }
             Destroy(gameObject, timeToDestroy);
         }
-        public static void AddEffect(GameObject gameObject)
+        public static void AddObjectToDictionary(GameObject gameObject)
         {
-            int id = idToEffect.Count;
-            idToEffect.Add(id, gameObject);
-            effectToId.Add(gameObject, id);
+            int id = idToObject.Count;
+            idToObject.Add(id, gameObject);
+            objectToId.Add(gameObject, id);
         }
         private void CharacterBody_OnBuffFinalStackLost(On.RoR2.CharacterBody.orig_OnBuffFinalStackLost orig, CharacterBody self, BuffDef buffDef)
         {
@@ -1074,12 +1218,12 @@ namespace Demolisher
             }
             if (buffDef == AfterSlam)
             {
-                new AddBodyEffectNetMessage(self.netId, effectToId[SlamableEffect], "SMAAASH", "", self.corePosition, false, OneVector(self.radius * 0.7f)).Send(NetworkDestination.Clients);
+                new AddBodyEffectNetMessage(self.netId, objectToId[SlamableEffect], "SMAAASH", "", self.corePosition, false, OneVector(self.radius * 0.7f)).Send(NetworkDestination.Clients);
             }
             if (buffDef == VelocityPreserve)
             {
-                new AddBodyEffectNetMessage(self.netId, effectToId[SmokeEffect], "DemoSmokeFeet", "FootR", Vector3.zero, true, OneVector(1f)).Send(NetworkDestination.Clients);
-                new AddBodyEffectNetMessage(self.netId, effectToId[SmokeEffect], "DemoSmokeFeet", "FootL", Vector3.zero, true, OneVector(1f)).Send(NetworkDestination.Clients);
+                new AddBodyEffectNetMessage(self.netId, objectToId[SmokeEffect], "DemoSmokeFeet", "FootR", Vector3.zero, true, OneVector(1f)).Send(NetworkDestination.Clients);
+                new AddBodyEffectNetMessage(self.netId, objectToId[SmokeEffect], "DemoSmokeFeet", "FootL", Vector3.zero, true, OneVector(1f)).Send(NetworkDestination.Clients);
             }
         }
 
@@ -1180,6 +1324,11 @@ namespace Demolisher
         public static BuffDef UpgradeOnKill;
         public static BuffDef AfterSlam;
         public static BuffDef DisableInputs;
+        public static BuffDef DisablePlayerPollInputs;
+        public static BuffDef DisablePrimary;
+        public static BuffDef DisableSecondary;
+        public static BuffDef DisableUtility;
+        public static BuffDef DisableSpecial;
         public static BuffDef SkullcutterDamageIncrease;
         public static GameObject PillProjectile;
         public static GameObject RocketProjectile;
@@ -1191,7 +1340,7 @@ namespace Demolisher
         public static GameObject NukeProjectile;
         public static GameObject JumperProjectile;
         public static GameObject HookProjectile;
-
+        public static GameObject MGEEasterEgg;
         public static GameObject DemoBody;
         public static GameObject SmokeEffect;
         public static GameObject SwingEffect;
@@ -1204,6 +1353,9 @@ namespace Demolisher
         public static GameObject SlamEffect;
         public static GameObject SlamableEffect;
         public static GameObject HitEffect;
+        public static GameObject NukeEffect;
+        public static GameObject StickyRangeIndicator;
+        public static GameObject HudExplosion;
         public static Sprite StickyIndicator;
         public static Sprite SwordIndicator;
         public static Sprite ShieldIndicator;
@@ -1317,11 +1469,16 @@ namespace Demolisher
             UpgradeOnKill = AddBuff("UpgradeOnKill", false, false, false, true, false);
             AfterSlam = AddBuff("SlamClutch", false, false, false, true, false);
             DisableInputs = AddBuff("DisableAI", false, false, false, true, false);
+            DisablePlayerPollInputs = AddBuff("DisablePlayerPollInputs", false, false, false, true, false);
+            DisablePrimary = AddBuff("DisablePrimary", false, false, false, true, false);
+            DisableSecondary = AddBuff("DisableSecondary", false, false, false, true, false);
+            DisableUtility = AddBuff("DisableUtility", false, false, false, true, false);
+            DisableSpecial = AddBuff("DisableSpecial", false, false, false, true, false);
             SkullcutterDamageIncrease = AddBuff("SkullcutterDamageIncrease", false, false, false, true, false);
             buffsToTrack.Add(AfterSlam);
             SmokeEffect = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/SmokingEffect.prefab");
             SmokeEffect.AddComponent<DontRotate>();
-            AddEffect(SmokeEffect);
+            AddObjectToDictionary(SmokeEffect);
             SwordIndicator = ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/UI/DemoSwordIndicatorThinHalf.png");
             StickyIndicator = ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/UI/DemoStickyIndicatorThinHalf.png");
             DetonateIndicator = ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/UI/DemoDetonateIndicatorThin.png");
@@ -1335,11 +1492,26 @@ namespace Demolisher
             Tracer = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/DemoTracer.prefab");
             SpinEffect = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/SpecialSwingNoTrigger.prefab");
             SlamableEffect = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/SlammableVFX.prefab");
-            AddEffect(SlamableEffect);
+            AddObjectToDictionary(SlamableEffect);
             SlamableEffect.AddComponent<DontRotate>();
             SlamEffect = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/SlamVFX.prefab");
-            AddEffect(SlamEffect);
+            AddObjectToDictionary(SlamEffect);
             HitEffect = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/HitVFX.prefab");
+            MGEEasterEgg = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/MGEflash.prefab");
+            MGEEasterEgg.AddComponent<MGEcomponent>();
+            AddObjectToDictionary(MGEEasterEgg);
+            NukeEffect = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/DemoNukeExplosion.prefab");
+            AddObjectToDictionary(NukeEffect);
+            PlaySound playSound = NukeEffect.AddComponent<PlaySound>();
+            playSound.soundAtAwake = NukeExplosionSound.playSoundString;
+            GameObject gameObject = NukeEffect.transform.Find("distortioncavein").gameObject;
+            StickyRangeIndicator = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/DemoStickyIndicator.prefab");
+            HudExplosion = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/HudExplosion.prefab");
+            HudExplosion.AddComponent<HudExplosionComponent>();
+            AddObjectToDictionary(HudExplosion);
+            //gameObject.layer = LayerIndex.ui.intVal;
+            //gameObject.AddComponent<WorldToScreenPosition>();
+
             //UpgradeItem = AddItem("DemoStompItem", ItemTier.NoTier, null, null, false, true, new ItemTag[] {ItemTag.WorldUnique}, null);
             List<GameObject> projectiles = new List<GameObject>();
             Main.PillProjectile = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/Projectiles/Pill/PillProjectile.prefab");
@@ -1441,7 +1613,7 @@ namespace Demolisher
                     GenerateConfig(actualName, ArmTimeName, stickyComponent.armTime, ref stickyComponent.armTimeConfigId);
                     GenerateConfig(actualName, FullArmTimeName, stickyComponent.fullArmTime, ref stickyComponent.fullArmTimeConfigId);
                     GenerateConfig(actualName, FullArmTimeDamageIncreaseName, stickyComponent.damageIncrease, ref stickyComponent.damageIncreaseConfigId);
-                    GenerateConfig(actualName, FullArmTimeBlastRadiusIncreaseName, stickyComponent.armTime, ref stickyComponent.radiusIncreaseConfigId);
+                    GenerateConfig(actualName, FullArmTimeBlastRadiusIncreaseName, stickyComponent.radiusIncrease, ref stickyComponent.radiusIncreaseConfigId);
                     GenerateConfig(actualName, DetonationTimeName, stickyComponent.detonationTime, ref stickyComponent.detonationTimeConfigId);
                 }
                 void GenerateConfig<T>(string name1, string name2, T defaultValue, ref int id)
@@ -1545,6 +1717,10 @@ namespace Demolisher
                         characterModel.transform.localScale += OneVector(0.35f);
                         NuclearSizeIncreaseComponent nuclearSizeIncreaseComponent2 = characterModel.gameObject.AddComponent<NuclearSizeIncreaseComponent>();
                         activePartsComponent.components.Add(nuclearSizeIncreaseComponent2);
+                        if (emotesEnabled)
+                        {
+                            EmoteCompatAbility.EmoteCompatabilityModelPartSizeSet(characterModel.gameObject, 0.3f);
+                        }
                     }
                 }
                 
@@ -1588,6 +1764,9 @@ namespace Demolisher
         public static DemoSoundClass DemoStickyReloadSound = new DemoSoundClass("stickybomblauncher_worldreload");
         public static DemoSoundClass DemoTackyShootSound = new DemoSoundClass("tacky_grenadier_shoot");
         public static DemoSoundClass DemoTackyShootCritSound = new DemoSoundClass("tacky_grenadier_shoot_crit");
+        public static DemoSoundClass OohSound = new DemoSoundClass("ticktockooh");
+        public static DemoSoundClass DontFearSound = new DemoSoundClass("dont_fear");
+        public static DemoSoundClass NukeExplosionSound = new DemoSoundClass("NukeExplosion");
         private static void CreateSounds()
         {
 
@@ -1621,6 +1800,18 @@ namespace Demolisher
                 toHeal.AddBarrier((percentageBefore - (1 - healFraction)) * toHeal.fullHealth);
             }
         }
+        public static Vector3 SampleParabola(Vector3 start, Vector3 end, float height, float t, Vector3 outDirection)
+        {
+            float parabolicT = t * 2 - 1;
+            //start and end are not level, gets more complicated
+            Vector3 travelDirection = end - start;
+            Vector3 levelDirection = end - new Vector3(start.x, end.y, start.z);
+            Vector3 right = Vector3.Cross(travelDirection, levelDirection);
+            Vector3 up = outDirection;
+            Vector3 result = start + t * travelDirection;
+            result += ((-parabolicT * parabolicT + 1) * height) * up.normalized;
+            return result;
+        }
         public static void SpawnEffect(GameObject effectToInstantiate, Vector3 position, bool localPosition, Quaternion rotation, Vector3 scale, Transform parent = null, string name = null)
         {
             GameObject instantiatedEffect = Instantiate(effectToInstantiate);
@@ -1649,12 +1840,19 @@ namespace Demolisher
             GameObject newTracer = Instantiate(Tracer);
             float newWidth = width * 10;
             LineRenderer lineRenderer = newTracer.transform.GetChild(0).GetComponent<LineRenderer>();
+            LineRenderer lineRenderer2 = newTracer.transform.GetChild(1).GetComponent<LineRenderer>();
             lineRenderer.SetPosition(0, statPosition);
             lineRenderer.SetPosition(1, endPosition);
             lineRenderer.SetWidth(newWidth, newWidth);
             DemoTracer demoTracer = newTracer.AddComponent<DemoTracer>();
             demoTracer.time = fadeTime;
             demoTracer.lineRenderer = lineRenderer;
+            lineRenderer2.SetPosition(0, statPosition);
+            lineRenderer2.SetPosition(1, endPosition);
+            lineRenderer2.SetWidth(newWidth * 10, newWidth * 10);
+            DemoTracer demoTracer2 = newTracer.AddComponent<DemoTracer>();
+            demoTracer2.time = fadeTime;
+            demoTracer2.lineRenderer = lineRenderer2;
         }
         public static Vector3 OneVector(float value)
         {
@@ -1677,22 +1875,13 @@ namespace Demolisher
                         DestroyImmediate(gameObject);
                         return;
                     }
-                    
-                    float newWidth = initialWidth * (1 - (stopwatch / time));
+                    float percentage = stopwatch / time;
+                    float newWidth = initialWidth * (1 - percentage);
                     lineRenderer.SetWidth(newWidth, newWidth);
+                    lineRenderer.startColor = new Color(1f, 1f, 1f, 1 - percentage);
+                    lineRenderer.endColor = new Color(1f, 1f, 1f, percentage);
                 }
             }
-            //public void FixedUpdate()
-            //{
-            //    stopwatch += Time.fixedDeltaTime;
-            //    if (lineRenderer != null)
-            //    {
-            //        if (stopwatch > time) DestroyImmediate(gameObject);
-            //        float newWidth = initialWidth * (1 - (stopwatch / time));
-            //        lineRenderer.SetWidth(newWidth, newWidth);
-            //    }
-                
-            //}
             public float time;
             private float stopwatch;
             private float initialWidth;
@@ -1878,6 +2067,43 @@ namespace Demolisher
         {
             return "{" + (name1 + name2).Replace(" ", "").ToLower() + "}";
         }
+        public class HudExplosionComponent : MonoBehaviour
+        {
+            public Transform explosion;
+            public Transform pulse;
+            public Transform caveIn;
+            public float stopwatch = 0f;
+            public void Awake()
+            {
+                ChildLocator childLocator = GetComponent<ChildLocator>();
+                explosion = childLocator.FindChild("Explosion");
+                pulse = childLocator.FindChild("Pulse");
+                caveIn = childLocator.FindChild("CaveIn");
+            }
+            public void Update()
+            {
+                stopwatch += Time.deltaTime;
+                if (explosion)
+                {
+                    explosion.localScale = Vector3.Lerp(Vector3.one, Vector3.zero, stopwatch / 5);
+                    if (stopwatch > 5f) Destroy(explosion.gameObject);
+
+                }
+                
+                if (pulse)
+                {
+                    pulse.localScale = Vector3.Lerp(Vector3.zero, OneVector(32f), stopwatch);
+                    if (stopwatch > 1f) Destroy(pulse.gameObject);
+                }
+                    
+                if (caveIn)
+                {
+                    caveIn.localScale = Vector3.Lerp(Vector3.one, Vector3.zero, stopwatch / 0.2f);
+                    if (stopwatch > 0.2f) Destroy(caveIn.gameObject);
+                }
+                    
+            }
+        }
         public class HitHelper : MonoBehaviour
         {
             private TeamFilter filter;
@@ -1898,6 +2124,14 @@ namespace Demolisher
                 }
             }
 
+        }
+        public class WorldToScreenPosition : MonoBehaviour
+        {
+            public void Awake()
+            {
+                Camera camera = Camera.main;
+                transform.position = camera.WorldToScreenPoint(transform.position);
+            }
         }
         public class DemoConfigProjectile : MonoBehaviour
         {
@@ -2198,6 +2432,25 @@ namespace Demolisher
                 writer.Write(speed);
                 writer.Write(dist);
                 writer.Write(stickedBody);
+            }
+        }
+        public class PlaySound : MonoBehaviour
+        {
+            public string soundAtAwake;
+            public string soundAtDestroy;
+            public void Awake()
+            {
+                if (soundAtAwake != "")
+                {
+                    Util.PlaySound(soundAtAwake, gameObject);
+                }
+            }
+            public void OnDestroy()
+            {
+                if (soundAtDestroy != "")
+                {
+                    Util.PlaySound(soundAtDestroy, gameObject);
+                }
             }
         }
         public class HookComponent : NetworkBehaviour
@@ -3147,6 +3400,8 @@ namespace Demolisher
             private float radius;
             private CharacterBody stickedCharacter;
             private StickedStickies stickedStickies;
+            private GameObject rangeIndicator;
+            private float rangeIndicatorCurrentVelocity = 1f;
             //public void OnEnable()
             //{
 
@@ -3218,7 +3473,9 @@ namespace Demolisher
                 }
                 projectileDamage = GetComponent<ProjectileDamage>();
                 explosionComponent = GetComponent<DemoExplosionComponent>();
-
+                rangeIndicator = Instantiate(StickyRangeIndicator);
+                rangeIndicator.transform.position = transform.position;
+                rangeIndicator.transform.localScale = OneVector(projectileImpactExplosion.blastRadius);
             }
             public virtual void OnStickyArmed()
             {
@@ -3280,6 +3537,17 @@ namespace Demolisher
                 }
                 if (stickedCharacter) OnStickedCharacterFixedUpdate(stickedCharacter);
             }
+            public virtual void LateUpdate()
+            {
+                if (rangeIndicator)
+                {
+                    rangeIndicator.transform.position = transform.position;
+                    if (projectileImpactExplosion)
+                    {
+                        rangeIndicator.transform.localScale = OneVector(Mathf.SmoothDamp(rangeIndicator.transform.localScale.x, projectileImpactExplosion.blastRadius, ref rangeIndicatorCurrentVelocity, 0.2f));
+                    }
+                }
+            }
             public virtual void OnStickedCharacterFixedUpdate(CharacterBody characterBody)
             {
             }
@@ -3326,6 +3594,7 @@ namespace Demolisher
                     }
                 }*/
                 if (stickedStickies && stickedStickies.stickyComponents.Contains(this)) stickedStickies.stickyComponents.Remove(this);
+                if (rangeIndicator) Destroy(rangeIndicator);
             }
             public virtual void Unstick()
             {
@@ -4080,6 +4349,8 @@ namespace Demolisher
             ManthreadsSkillDef = PassiveInit(ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoMannthreadsSkillIcon.png"), "DemoStompPassive", "DEMOMAN_STOMPSKILL_NAME", "DEMOMAN_STOMPSKILL_DESC");
             LanguageAPI.Add("DEMOMAN_STOMPSKILL_NAME", "Hell support");
             LanguageAPI.Add("DEMOMAN_STOMPSKILL_DESC", $"Negate all fall damage.");
+            LanguageAPI.Add("DEMOLISHER_MASTERY_UNLOCK_NAME", "Demolisher: Mastery");
+            LanguageAPI.Add("DEMOLISHER_MASTERY_UNLOCK_DESCRIPTION", "As Demolisher, complete the game on difficulty Monsoon or higher");
             foreach (var variant in demoStickyFamily.variants)
             {
                 stickySkills.Add(variant.skillDef);
@@ -5083,11 +5354,17 @@ namespace Demolisher
 
                 if (isAuthority)
                 {
+                    Vector3 rotat = aimRay.direction;
+                    Vector3 groundedRotat = new Vector3(rotat.x, 0, rotat.z).normalized;
+                    if (!Physics.Raycast(aimRay, 3.5f, LayerIndex.world.mask + LayerIndex.entityPrecise.mask, QueryTriggerInteraction.UseGlobal))
+                    {
+                        rotat = Quaternion.AngleAxis(-5.5f, (Quaternion.AngleAxis(90f, Vector3.up) * groundedRotat)) * rotat;
+                    }
                     FireProjectileInfo fireProjectileInfo = new FireProjectileInfo
                     {
                         projectilePrefab = projectile,
                         position = aimRay.origin,
-                        rotation = Util.QuaternionSafeLookRotation(aimRay.direction),
+                        rotation =  Util.QuaternionSafeLookRotation(rotat),
                         owner = base.gameObject,
                         damage = damage * this.damageStat * (chargeTags.Contains(GrenadeLauncherChargeAffection.Damage) ? 1 + charge : 1),
                         force = 1f,
@@ -5888,10 +6165,9 @@ namespace Demolisher
             public override void OnEnter()
             {
                 base.OnEnter();
-                
             }
         }
-        public abstract class BigAssAttack : BaseState
+        public abstract class BigAssAttack : BaseSkillState
         {
             private int stage = 0;
             public float power = 0f;
@@ -5976,7 +6252,7 @@ namespace Demolisher
                 base.OnEnter();
                 swordClass = swordDictionary.ContainsKey(skillLocator.primary.baseSkill) ? swordDictionary[skillLocator.primary.baseSkill] : DefaultSword;
                 BulletAttack swordAttack = swordClass.bulletAttack;
-                Vector3 center = inputBank ? inputBank.aimOrigin + characterDirection.forward * swordAttack.maxDistance : transform.position + characterDirection.forward * swordAttack.maxDistance;
+                //Vector3 center = inputBank ? inputBank.aimOrigin + new Vector3(inputBank.aimDirection.x, 0f, inputBank.aimDirection.z) * swordAttack.maxDistance : transform.position + characterDirection.forward * swordAttack.maxDistance;
                 if (NetworkServer.active)
                 {
                     BulletAttack bulletAttack2 = new BulletAttack()
@@ -5999,7 +6275,7 @@ namespace Demolisher
                         falloffModel = BulletAttack.FalloffModel.None,
                         damageColorIndex = DamageColorIndex.Default,
                         isCrit = base.RollCrit(),
-                        origin = center,
+                        origin = transform.position,
                         owner = gameObject,
                         hitCallback = swordAttack != null ? swordAttack.hitCallback : default,
 
@@ -6009,7 +6285,7 @@ namespace Demolisher
                 }
                 EffectData effectData = new EffectData
                 {
-                    origin = center,
+                    origin = transform.position,
                     scale = swordAttack.radius
                 };
                 EffectManager.SpawnEffect(groundSlamVFX, effectData, true);
@@ -6025,12 +6301,14 @@ namespace Demolisher
             public Vector3 previousScale;
             public GameObject sphereIndicator;
             public CameraTargetParams.CameraParamsOverrideHandle cameraParamsOverrideHandle;
+            public float maxDistance = 60f;
+            public Dictionary<Collider, CharacterBody> keyValuePairs = new Dictionary<Collider, CharacterBody>();
             
             public override void OnEnter()
             {
                 base.OnEnter();
                 swordClass = swordDictionary.ContainsKey(skillLocator.primary.baseSkill) ? swordDictionary[skillLocator.primary.baseSkill] : DefaultSword;
-                Transform modelTransform = GetComponent<ModelLocator>()?.modelTransform;
+                Transform modelTransform = modelLocator.modelTransform;
                 ChildLocator childLocator = modelTransform ? modelTransform.GetComponent<ChildLocator>() : null;
                 if (childLocator)
                 {
@@ -6042,27 +6320,26 @@ namespace Demolisher
                 }
                 PlayAnimation("Gesture, Override", "SwingUp", "Slash.playbackRate", swordClass.swingUpTime / base.attackSpeedStat, 0.2f);
                 sphereIndicator = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-                sphereIndicator.transform.localScale = OneVector(swordClass.bulletAttack.maxDistance);
+                sphereIndicator.transform.localScale = OneVector(swordClass.bulletAttack.maxDistance) * 8;
                 sphereIndicator.layer = LayerIndex.noCollision.intVal;
                 sphereIndicator.GetComponent<Renderer>().material = indicatorMaterial;
                 if (cameraTargetParams)
                 {
                     CharacterCameraParamsData characterCameraParamsData = new CharacterCameraParamsData
                     {
-                        fov = 60f,
+                        fov = 80f,
                         isFirstPerson = false,
-                        idealLocalCameraPos = new Vector3(0f, 0f, 4f),
+                        idealLocalCameraPos = new Vector3(0f, 3f, -9f),
                         maxPitch = 85f,
                         minPitch = -85f,
-                        overrideFirstPersonFadeDuration = 0.2f,
-                        pivotVerticalOffset = 4f
+                        overrideFirstPersonFadeDuration = 0.2f
                     };
                     CameraTargetParams.CameraParamsOverrideRequest cameraParamsOverrideRequest = new CameraTargetParams.CameraParamsOverrideRequest
                     {
                        cameraParamsData = characterCameraParamsData,
                        priority = 6
                     };
-                    cameraParamsOverrideHandle = cameraTargetParams.AddParamsOverride(cameraParamsOverrideRequest);
+                    cameraParamsOverrideHandle = cameraTargetParams.AddParamsOverride(cameraParamsOverrideRequest, 0.5f);
                 }
             }
             public override void OnExit()
@@ -6087,11 +6364,69 @@ namespace Demolisher
                 }
                 if (sphereIndicator)
                 {
+                    bool again = false;
+                Again:
                     Vector3 aimVector = GetAimRay().direction;
                     Vector3 aimOrigin = GetAimRay().origin;
+                    if (again)
+                    {
+                        aimOrigin = aimOrigin + (aimVector * maxDistance);
+                        aimVector = Physics.gravity.normalized;
+                    }
+                    RaycastHit[] raycastHits = Physics.RaycastAll(aimOrigin, aimVector, again ? maxDistance * 2 : maxDistance, LayerIndex.world.mask + LayerIndex.entityPrecise.mask, QueryTriggerInteraction.UseGlobal);
+                    if (raycastHits != null && raycastHits.Length > 0)
+                    {
+                        bool flag = true;
+                        foreach (RaycastHit raycastHit in raycastHits)
+                        {
+                            CharacterBody body = null;
+                            
+                            if (keyValuePairs.ContainsKey(raycastHit.collider))
+                            {
+                                body = keyValuePairs[raycastHit.collider];
+                            }
+                            else
+                            {
+                                HurtBox hurtBox = raycastHit.collider.GetComponent<HurtBox>();
+                                body = hurtBox ? hurtBox.healthComponent.body : null;
+                                keyValuePairs.Add(raycastHit.collider, body);
+                            }
+                            if (body && body.teamComponent && body.teamComponent.teamIndex == characterBody.teamComponent.teamIndex)
+                            {
+                                flag = false;
+                            }
+                            else
+                            {
+                                flag = true;
+                            }
+                            if (flag)
+                            {
+                                sphereIndicator.SetActive(true);
+                                sphereIndicator.transform.position = raycastHit.point;
+                                break;
+                            }
+                            
+                        }
+                        if (!flag)
+                        {
+                            sphereIndicator.SetActive(false);
+                        }
+                        
+                    }
+                    else
+                    {
+                        if (!again)
+                        {
+                            again=true;
+                            goto Again;
+                        }
+                        sphereIndicator.SetActive(false);
+                    }
+                    /*
                     Vector3 groundedAimVector = new Vector3(aimVector.x, 0f, aimVector.z);
-                    float angle = Vector3.Angle(aimVector, groundedAimVector) * 2f;
-                    RaycastHit[] raycastHits = Physics.RaycastAll(aimOrigin + (groundedAimVector * angle + new Vector3(0f, 30f, 0f)), Physics.gravity, 9999f, LayerIndex.world.mask, QueryTriggerInteraction.UseGlobal);
+                    float angle = Vector3.Angle(aimVector, groundedAimVector) * 3f;
+                    float distance = (maxDistance / maxDistance + angle) * angle;
+                    RaycastHit[] raycastHits = Physics.RaycastAll(aimOrigin + (groundedAimVector * distance + new Vector3(0f, 30f, 0f)), Physics.gravity, 9999f, LayerIndex.world.mask, QueryTriggerInteraction.UseGlobal);
                     if(raycastHits != null && raycastHits.Length > 0)
                     {
                         sphereIndicator.SetActive(true);
@@ -6109,7 +6444,7 @@ namespace Demolisher
                     else
                     {
                         sphereIndicator.SetActive(false);
-                    }
+                    }*/
                 }
             }
             public override void OnRelease()
@@ -6117,8 +6452,8 @@ namespace Demolisher
                 if(sphereIndicator && sphereIndicator.activeSelf)
                 {
                     Vector3 aimVector = GetAimRay().direction;
-                    Vector3 teleportPosition = sphereIndicator.transform.position + (new Vector3(aimVector.x, 0f, aimVector.y) * -1 * swordClass.bulletAttack.maxDistance);
-                    SimpleTracer(transform.position, teleportPosition);
+                    Vector3 teleportPosition = sphereIndicator.transform.position;
+                    SimpleTracer(transform.position, teleportPosition, 1f, 1f);
                     SpawnEffect(HitEffect, transform.position, false, Quaternion.identity, OneVector(1f));
                     SpawnEffect(HitEffect, teleportPosition, false, Quaternion.identity, OneVector(1f));
                     Util.PlaySound(EntityStates.ImpMonster.BlinkState.beginSoundString, base.gameObject);
@@ -6130,78 +6465,138 @@ namespace Demolisher
                 base.OnRelease();
             }
         }
-        public class BigAssSticky : BigAssAttack
+        public class BigAssStickyFire : BigAssAttackFire
         {
-            public override float chargeCap => 3f;
-            public GameObject projectile;
-            public float damage;
-            public Transform cannonTransform;
-            public Vector3 previousScale;
-            public float speedOverride = -1;
             public override void OnEnter()
             {
                 base.OnEnter();
-                DemoStickyClass demoSticky = bombProjectiles.ContainsKey(skillLocator.primary.baseSkill) ? bombProjectiles[skillLocator.primary.baseSkill] : null;
-                projectile = demoSticky != null ? demoSticky.stickyObject : LegacyResourcesAPI.Load<GameObject>("Prefabs/Projectiles/FireMeatBall");
-                damage = demoSticky != null ? demoSticky.stickyState.damage : 4;
-                demoComponent = GetComponent<DemoComponent>();
-                speedOverride = demoSticky != null ? -1 : 60;
-                Transform modelTransform = GetComponent<ModelLocator>()?.modelTransform;
-                ChildLocator childLocator = modelTransform ? modelTransform.GetComponent<ChildLocator>() : null;
-                if (childLocator)
+                //if (demoComponent)
+                //{
+                //    demoComponent.DetonateNoLimitStickies();
+                //    demoComponent.noLimitStickies++;
+                //}
+                Ray ray = GetAimRay();
+                if (true)
                 {
-                    cannonTransform = childLocator.FindChild("HeadCannon");
-                    if (cannonTransform != null)
+                    RaycastHit raycastHit;
+                    
+                    if (Physics.Raycast(ray, out raycastHit, 9999999f, LayerIndex.world.mask + LayerIndex.entityPrecise.mask, QueryTriggerInteraction.UseGlobal))
                     {
-                        previousScale = cannonTransform.localScale;
+                        if (isAuthority)
+                        {
+                            BlastAttack nukeExplosion = new BlastAttack
+                            {
+                                attacker = gameObject,
+                                attackerFiltering = AttackerFiltering.Default,
+                                baseDamage = characterBody.damage * 1000,
+                                baseForce = 3f,
+                                bonusForce = Vector3.up,
+                                canRejectForce = true,
+                                crit = RollCrit(),
+                                damageColorIndex = DamageColorIndex.Default,
+                                teamIndex = teamComponent.teamIndex,
+                                damageType = new DamageTypeCombo(DamageType.Generic, DamageTypeExtended.Generic, DamageSource.Special),
+                                falloffModel = BlastAttack.FalloffModel.None,
+                                impactEffect = default,
+                                radius = 16f,
+                                position = raycastHit.point + (raycastHit.normal * 0.01f),
+                                inflictor = gameObject,
+                                losType = BlastAttack.LoSType.None,
+                                procChainMask = default,
+                                procCoefficient = 1f,
+                            };
+                            BlastAttack.Result result = nukeExplosion.Fire();
+                            Vector3 direction = ray.direction;
+                            new InstantiateObjectNetMessage(objectToId[NukeEffect], nukeExplosion.position, new Vector3(0f, direction.y, 0f), OneVector(nukeExplosion.radius / 4f), 6f).Send(NetworkDestination.Clients);
+                            //new InstantiateObjectNetMessage(objectToId[HudExplosion], Vector3.zero, Vector3.zero, Vector3.one, 5f).Send(NetworkDestination.Clients);
+                        }
+                        
+                        
+                        SimpleTracer(ray.origin, raycastHit.point, 0.2f, 0.4f);
+
                     }
+                    //FireProjectileInfo fireProjectileInfo = new FireProjectileInfo
+                    //{
+                    //    projectilePrefab = projectile,
+                    //    position = inputBank ? inputBank.aimOrigin : transform.position,
+                    //    rotation = Util.QuaternionSafeLookRotation(inputBank ? inputBank.aimDirection : transform.rotation.eulerAngles),
+                    //    procChainMask = default,
+                    //    owner = gameObject,
+                    //    damage = base.damageStat * damage * 2.5f * (1 + (power / chargeCap * 2f)),
+                    //    crit = RollCrit(),
+                    //    force = 200f,
+                    //    damageColorIndex = DamageColorIndex.Default,
+                    //    damageTypeOverride = new DamageTypeCombo?(new DamageTypeCombo(DamageType.Generic, DamageTypeExtended.Generic, DamageSource.Special)),
+                    //    speedOverride = speedOverride
+                    //};
+                    //ProjectileManager.instance.FireProjectile(fireProjectileInfo);
                 }
+                
+                PlayAnimation("Gun, Override", "ShootGun");
+                Util.PlaySound(DemoTackyShootSound.playSoundString, gameObject);
+                //if (cannonTransform)
+                //{
+                //    cannonTransform.localScale = previousScale;
+                //}
+                //if (demoComponent)
+                //{
+                //    demoComponent.noLimitStickies--;
+                //}
+                outer.SetNextStateToMain();
+            }
+        }
+        public class BigAssSticky : BigAssAttack
+        {
+            public override float chargeCap => 3f;
+            //public GameObject projectile;
+            //public float damage;
+            //public Transform cannonTransform;
+            //public Vector3 previousScale;
+            //public float speedOverride = -1;
+            public override void OnEnter()
+            {
+                base.OnEnter();
+                //DemoStickyClass demoSticky = bombProjectiles.ContainsKey(skillLocator.primary.baseSkill) ? bombProjectiles[skillLocator.primary.baseSkill] : null;
+                //projectile = demoSticky != null ? demoSticky.stickyObject : LegacyResourcesAPI.Load<GameObject>("Prefabs/Projectiles/FireMeatBall");
+                //damage = demoSticky != null ? demoSticky.stickyState.damage : 4;
+                //demoComponent = GetComponent<DemoComponent>();
+                //speedOverride = demoSticky != null ? -1 : 60;
+                //Transform modelTransform = GetComponent<ModelLocator>()?.modelTransform;
+                //ChildLocator childLocator = modelTransform ? modelTransform.GetComponent<ChildLocator>() : null;
+                //if (childLocator)
+                //{
+                //    cannonTransform = childLocator.FindChild("HeadCannon");
+                //    if (cannonTransform != null)
+                //    {
+                //        previousScale = cannonTransform.localScale;
+                //    }
+                //}
             }
             public override void OnHold()
             {
                 base.OnHold();
-                if (!isCharged && cannonTransform)
-                {
-                    cannonTransform.localScale = Vector3.MoveTowards(cannonTransform.localScale, previousScale + new Vector3(chargeCap, chargeCap, chargeCap), GetDeltaTime());
-                }
+                //if (!isCharged && cannonTransform)
+                //{
+                //    cannonTransform.localScale = Vector3.MoveTowards(cannonTransform.localScale, previousScale + new Vector3(chargeCap, chargeCap, chargeCap), GetDeltaTime());
+                //}
             }
             public override void OnRelease()
             {
-                if (demoComponent)
-                {
-                    demoComponent.DetonateNoLimitStickies();
-                    demoComponent.noLimitStickies++;
-                }
-                if (isAuthority)
-                {
-                    FireProjectileInfo fireProjectileInfo = new FireProjectileInfo
-                    {
-                        projectilePrefab = projectile,
-                        position = inputBank ? inputBank.aimOrigin : transform.position,
-                        rotation = Util.QuaternionSafeLookRotation(inputBank ? inputBank.aimDirection : transform.rotation.eulerAngles),
-                        procChainMask = default,
-                        owner = gameObject,
-                        damage = base.damageStat * damage * 2.5f * (1 + (power / chargeCap * 2f)),
-                        crit = RollCrit(),
-                        force = 200f,
-                        damageColorIndex = DamageColorIndex.Default,
-                        damageTypeOverride = new DamageTypeCombo?(new DamageTypeCombo(DamageType.Generic, DamageTypeExtended.Generic, DamageSource.Special)),
-                        speedOverride = speedOverride
-                    };
-                    ProjectileManager.instance.FireProjectile(fireProjectileInfo);
-                }
-                PlayAnimation("Gun, Override", "ShootGun");
-                Util.PlaySound(DemoGrenadeShootCritSound.playSoundString, gameObject);
-                if (cannonTransform)
-                {
-                    cannonTransform.localScale = previousScale;
-                }
-                if (demoComponent)
-                {
-                    demoComponent.noLimitStickies--;
-                }
+                
                 base.OnRelease();
-                outer.SetNextStateToMain();
+                if (isCharged)
+                {
+                    outer.SetNextState(new BigAssStickyFire { chargePercentage = power / chargeCap });
+                }
+                else
+                {
+                    if (activatorSkillSlot)
+                    {
+                        activatorSkillSlot.rechargeStopwatch = (power / chargeCap) * activatorSkillSlot.finalRechargeInterval / 2f;
+                    }
+                    outer.SetNextStateToMain();
+                }
+                
             }
         }
         public class BigAssAttackRedirector : BaseState
@@ -6257,6 +6652,10 @@ namespace Demolisher
             public DemoComponent demoComponent;
             public CharacterDirection characterDirection;
             public PlayerCharacterMasterController playerCharacterMasterController;
+            private bool wasGravityOff = false;
+            public CameraTargetParams.CameraParamsOverrideHandle cameraParamsOverrideHandle;
+            private bool switchCameraSide = false;
+            private bool endState = false;
             public override void OnEnter()
             {
                 
@@ -6265,7 +6664,7 @@ namespace Demolisher
                 activatorSkillSlot.stock = stocks * 4;
                 if (isAuthority)
                 {
-                    timeScale = 0.6f + ((0.35f / (0.35f + MathF.Min(0, base.attackSpeedStat - 1))) * MathF.Min(0, base.attackSpeedStat - 1));
+                    timeScale = 10 * attackSpeedStat;
                     new TimeScaleChangeNetMessage(-timeScale).Send(NetworkDestination.Clients);
                 }
                 demoComponent = GetComponent<DemoComponent>();
@@ -6279,6 +6678,34 @@ namespace Demolisher
                 }
                 characterDirection = GetComponent<CharacterDirection>();
                 playerCharacterMasterController = characterBody.master?.playerCharacterMasterController;
+                if (characterMotor)
+                {
+                    wasGravityOff = !characterMotor.useGravity;
+                    characterMotor.useGravity = false;
+                }
+                else if (rigidbody)
+                {
+                    wasGravityOff = !rigidbody.useGravity;
+                    rigidbody.useGravity = false;
+                }
+                if (cameraTargetParams)
+                {
+                    CharacterCameraParamsData characterCameraParamsData = new CharacterCameraParamsData
+                    {
+                        fov = 80f,
+                        isFirstPerson = false,
+                        idealLocalCameraPos = new Vector3(switchCameraSide ? 3f : -3f, 0f, -9f),
+                        maxPitch = 85f,
+                        minPitch = -85f,
+                        overrideFirstPersonFadeDuration = 0.2f
+                    };
+                    CameraTargetParams.CameraParamsOverrideRequest cameraParamsOverrideRequest = new CameraTargetParams.CameraParamsOverrideRequest
+                    {
+                        cameraParamsData = characterCameraParamsData,
+                        priority = 6
+                    };
+                    cameraParamsOverrideHandle = cameraTargetParams.AddParamsOverride(cameraParamsOverrideRequest, 0.1f);
+                }
             }
             public override void Update()
             {
@@ -6293,7 +6720,7 @@ namespace Demolisher
                     {
                         if (player.GetButtonDown(7) && attack) Leap();
                         if (!attack && player.GetButtonUp(7)) attack = true;
-                        if (player.GetButtonDown(10) && isAuthority) outer.SetNextStateToMain();
+                        if (player.GetButtonDown(10) && isAuthority) endState = true;
                     }
                 }
 
@@ -6301,7 +6728,26 @@ namespace Demolisher
             public void Leap()
             {
                 activatorSkillSlot.stock--;
-
+                switchCameraSide = !switchCameraSide;
+                if (cameraTargetParams)
+                {
+                    cameraTargetParams.RemoveParamsOverride(cameraParamsOverrideHandle, 0f);
+                    CharacterCameraParamsData characterCameraParamsData = new CharacterCameraParamsData
+                    {
+                        fov = 80f,
+                        isFirstPerson = false,
+                        idealLocalCameraPos = new Vector3(switchCameraSide ? 3f : -3f, 0f, -9f),
+                        maxPitch = 85f,
+                        minPitch = -85f,
+                        overrideFirstPersonFadeDuration = 0.2f
+                    };
+                    CameraTargetParams.CameraParamsOverrideRequest cameraParamsOverrideRequest = new CameraTargetParams.CameraParamsOverrideRequest
+                    {
+                        cameraParamsData = characterCameraParamsData,
+                        priority = 6
+                    };
+                    cameraParamsOverrideHandle = cameraTargetParams.AddParamsOverride(cameraParamsOverrideRequest, 0f);
+                }
                 Vector3 finalPosition = Physics.Raycast(GetAimRay(), out RaycastHit hitInfo, distance, LayerIndex.world.mask, QueryTriggerInteraction.UseGlobal) ? hitInfo.point : GetAimRay().origin + (GetAimRay().direction * distance);
                 if (isAuthority)
                 {
@@ -6335,24 +6781,40 @@ namespace Demolisher
                 if (characterDirection)
                 {
                     Vector3 direction = finalPosition - transform.position;
-                    characterDirection.forward = direction.normalized;
+                    characterDirection.targetVector = direction.normalized;
                 }
                 SimpleTracer(transform.position, finalPosition);
                 Util.PlaySound(EntityStates.ImpMonster.BlinkState.beginSoundString, base.gameObject);
                 TeleportHelper.TeleportBody(characterBody, finalPosition, false);
                 
                 attack = false;
-                if (activatorSkillSlot.stock <= 0 && isAuthority) outer.SetNextStateToMain();
+                if (activatorSkillSlot.stock <= 0 && isAuthority) endState = true;
             }
             public override void OnExit()
             {
                 base.OnExit();
                 if (isAuthority)
                 {
-                    new TimeScaleChangeNetMessage(+timeScale).Send(NetworkDestination.Clients);
+                    new TimeScaleChangeNetMessage(timeScale).Send(NetworkDestination.Clients);
                 }
                 int stocks = activatorSkillSlot.stock;
                 activatorSkillSlot.stock = stocks / 4;
+                if (!wasGravityOff)
+                {
+                    if (characterMotor)
+                    {
+                        characterMotor.useGravity = true;
+                    }
+                    else if (rigidbody)
+                    {
+                        rigidbody.useGravity = true;
+                    }
+                }
+                if (cameraTargetParams)
+                {
+                    cameraTargetParams.RemoveParamsOverride(cameraParamsOverrideHandle);
+                }
+                
             }
             public override void FixedUpdate()
             {
@@ -6371,6 +6833,7 @@ namespace Demolisher
                 
                 time -= Time.fixedUnscaledDeltaTime;
                 if (time <= 0 && isAuthority) outer.SetNextStateToMain();
+                if (endState) outer.SetNextStateToMain();
             }
         }
         public abstract class UltraInstinctRework : BaseSkillState
@@ -6404,6 +6867,7 @@ namespace Demolisher
                 {
                     outer.SetNextStateToMain();
                 }
+
             }
             public override void OnExit()
             {
@@ -7195,7 +7659,7 @@ namespace Demolisher
     }
     public class Unlockables
     {
-        [RegisterAchievement("DEMO_MASTERY_UNLOCK", "DemoMasteryUnlock", null, 10)]
+        [RegisterAchievement("DEMOLISHER_MASTERY_UNLOCK", "DemoMasteryUnlock", null, 10)]
         public class NuclearSkinAchievement : DemoMasteryUnlockable
         {
             public override string characterName => "DemoBody";
@@ -7265,6 +7729,14 @@ public static class EmoteCompatAbility
         skele.transform.localPosition = new Vector3(0f, -0f, 0f);
         skele.transform.localRotation = Quaternion.identity;
         EmotesAPI.CustomEmotesAPI.animChanged += CustomEmotesAPI_animChanged;
+    }
+    public static void EmoteCompatabilityModelPartSizeSet(GameObject gameObject, float scaleAddition)
+    {
+        BoneMapper boneMapper = gameObject.GetComponentInChildren<BoneMapper>();
+        if (boneMapper != null)
+        {
+            boneMapper.scale += scaleAddition;
+        }
     }
     private static void CustomEmotesAPI_animChanged(string newAnimation, BoneMapper mapper)
     {
