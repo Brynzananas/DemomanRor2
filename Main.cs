@@ -57,9 +57,9 @@ namespace Demolisher
     [BepInDependency(R2API.Networking.NetworkingAPI.PluginGUID)]
     [BepInDependency(BodyModelAdditionsAPI.Main.ModGuid, BepInDependency.DependencyFlags.HardDependency)]
     [BepInDependency(NetworkConfigs.Main.ModGuid, BepInDependency.DependencyFlags.HardDependency)]
-    [BepInDependency("com.TheTimeSweeper.LoadoutSkillTitles", BepInDependency.DependencyFlags.SoftDependency)]
-    [BepInDependency("com.weliveinasociety.CustomEmotesAPI", BepInDependency.DependencyFlags.SoftDependency)]
-    [BepInDependency("com.weliveinasociety.CustomEmotesAPI", BepInDependency.DependencyFlags.SoftDependency)]
+    [BepInDependency(LoadoutSkillTitlesCompatability.loadoutSKillTitlesGUID, BepInDependency.DependencyFlags.SoftDependency)]
+    [BepInDependency(EmoteCompatAbility.customEmotesApiGUID, BepInDependency.DependencyFlags.SoftDependency)]
+    [BepInDependency(RiskOfOptionsCompatability.riskOfOptionsGUID, BepInDependency.DependencyFlags.SoftDependency)]
     [NetworkCompatibility(CompatibilityLevel.EveryoneMustHaveMod, VersionStrictness.EveryoneNeedSameModVersion)]
     //[R2APISubmoduleDependency(nameof(CommandHelper))]
     [System.Serializable]
@@ -82,6 +82,7 @@ namespace Demolisher
         public static Dictionary<string, string> objectsActualNames = new Dictionary<string, string>();
         public static Dictionary<string, string> tokenModifications = new Dictionary<string, string>();
         public static Dictionary<DemoVoicelineType, List<DemoVoiceline>> demoVoiceLines = new Dictionary<DemoVoicelineType, List<DemoVoiceline>>();
+        public static Dictionary<SkillDef, int> skillsBonusStocksMultiplier = new Dictionary<SkillDef, int>();
         public static List<string> tokensToModify = new List<string>();
         public static SurvivorDef DemoSurvivorDef;
         public static BodyIndex DemoBodyIndex;
@@ -92,8 +93,8 @@ namespace Demolisher
         {
             PInfo = Info;
             ConfigFile = Config;
-            ThunderkitAssets = AssetBundle.LoadFromFile(System.IO.Path.Combine(System.IO.Path.GetDirectoryName(PInfo.Location), "assetbundles", "demomanpackage"));
-            SoundAPI.SoundBanks.Add(System.IO.Path.Combine(System.IO.Path.GetDirectoryName(PInfo.Location), "soundbanks", "Demoman.bnk"));
+            ThunderkitAssets = AssetBundle.LoadFromFileAsync(System.IO.Path.Combine(System.IO.Path.GetDirectoryName(PInfo.Location), "assetbundles", "demomanpackage")).assetBundle;
+            uint soundbankId = SoundAPI.SoundBanks.Add(System.IO.Path.Combine(System.IO.Path.GetDirectoryName(PInfo.Location), "soundbanks", "Demoman.bnk"));
             foreach (Material material in ThunderkitAssets.LoadAllAssets<Material>())
             {
                 if (!material.shader.name.StartsWith("StubbedRoR2"))
@@ -156,6 +157,7 @@ namespace Demolisher
             //On.RoR2.PlayerCharacterMasterController.PollButtonInput += PlayerCharacterMasterController_PollButtonInput;
             //On.RoR2.UI.LogBook.PageBuilder.AddBodyLore += PageBuilder_AddBodyLore;
             Run.onClientGameOverGlobal += Run_onClientGameOverGlobal;
+            On.RoR2.GenericSkill.SetBonusStockFromBody += GenericSkill_SetBonusStockFromBody;
             ContentManager.collectContentPackProviders += (addContentPackProvider) =>
             {
                 addContentPackProvider(new ContentPacks());
@@ -166,6 +168,16 @@ namespace Demolisher
             }
             
         }
+
+        private void GenericSkill_SetBonusStockFromBody(On.RoR2.GenericSkill.orig_SetBonusStockFromBody orig, GenericSkill self, int newBonusStockFromBody)
+        {
+            int bonus = 1;
+            if(self.skillDef != null)
+            if (skillsBonusStocksMultiplier.ContainsKey(self.skillDef)) bonus = skillsBonusStocksMultiplier[self.skillDef];
+            newBonusStockFromBody *= bonus;
+            orig(self, newBonusStockFromBody);
+        }
+
         public static event Action<Run, RunReport> onClientGameOverEvent;
         private void Run_onClientGameOverGlobal(Run arg1, RunReport arg2)
         {
@@ -323,6 +335,7 @@ namespace Demolisher
             NetworkingAPI.RegisterMessageType<AddBodyEffectNetMessage>();
             NetworkingAPI.RegisterMessageType<TimeScaleChangeNetMessage>();
             NetworkingAPI.RegisterMessageType<RemoveBodyEffectNetMessage>();
+            NetworkingAPI.RegisterMessageType<LeapNetMessage>();
             NetworkingAPI.RegisterMessageType<ModifyVectorOfRigidBodyNetMessage>();
             NetworkingAPI.RegisterMessageType<ModifyFloatOfCharacterMotortNetMessage>();
             NetworkingAPI.RegisterMessageType<ModifyVectorOfCharacterMotorNetMessage>();
@@ -752,6 +765,41 @@ namespace Demolisher
                 writer.Write(position);
                 writer.Write(isLocalSpace);
                 writer.Write(scale);
+            }
+        }
+        public class LeapNetMessage : INetMessage
+        {
+            NetworkInstanceId networkInstanceId;
+            public LeapNetMessage(NetworkInstanceId networkInstanceId)
+            {
+                this.networkInstanceId = networkInstanceId;
+            }
+            public LeapNetMessage()
+            {
+
+            }
+            public void Deserialize(NetworkReader reader)
+            {
+                networkInstanceId = reader.ReadNetworkId();
+            }
+
+            public void OnReceived()
+            {
+                GameObject gameObject = Util.FindNetworkObject(networkInstanceId);
+                if (!gameObject) return;
+                CharacterBody characterBody = gameObject.GetComponent<CharacterBody>();
+                if(!characterBody) return;
+                SkillLocator skillLocator = characterBody.skillLocator;
+                if(skillLocator == null) return;
+                foreach(var skill in skillLocator.allSkills)
+                {
+                    if (skill && skill.stateMachine && skill.stateMachine.state != null && skill.stateMachine.state is UltraInstinctFinal) (skill.stateMachine.state as UltraInstinctFinal).Leap();
+                }
+            }
+
+            public void Serialize(NetworkWriter writer)
+            {
+                writer.Write(networkInstanceId);
             }
         }
         public class TimeScaleChangeNetMessage : INetMessage
@@ -1417,6 +1465,7 @@ namespace Demolisher
         public static GameObject StickyRangeIndicator;
         public static GameObject HudExplosion;
         public static GameObject SlashEffect;
+        public static GameObject SuckEffect;
         public static Sprite StickyIndicator;
         public static Sprite SwordIndicator;
         public static Sprite ShieldIndicator;
@@ -1574,7 +1623,7 @@ namespace Demolisher
             SlashEffect = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/SlashVFX.prefab");
             //gameObject.layer = LayerIndex.ui.intVal;
             //gameObject.AddComponent<WorldToScreenPosition>();
-
+            SuckEffect = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/SuckVFX.prefab");
             //UpgradeItem = AddItem("DemoStompItem", ItemTier.NoTier, null, null, false, true, new ItemTag[] {ItemTag.WorldUnique}, null);
             List<GameObject> projectiles = new List<GameObject>();
             Main.PillProjectile = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/Projectiles/Pill/PillProjectile.prefab");
@@ -1622,7 +1671,8 @@ namespace Demolisher
             GameObject explosionVFX = Addressables.LoadAssetAsync<GameObject>("RoR2/Base/Toolbot/OmniExplosionVFXToolbotQuick.prefab").WaitForCompletion();
             foreach (GameObject projectile in projectiles)
             {
-                DemoConfigProjectile demoConfigProjectile = projectile.AddComponent<DemoConfigProjectile>();
+                //DemoConfigProjectile demoConfigProjectile = projectile.AddComponent<DemoConfigProjectile>();
+                DemoProjectileContradictGravity demoProjectileContradictGravity = projectile.AddComponent<DemoProjectileContradictGravity>();
                 string actualName = objectsActualNames[projectile.name];
                 NetworkIdentity networkIdentity = projectile.GetComponent<NetworkIdentity>();
                 if (networkIdentity != null)
@@ -1633,13 +1683,20 @@ namespace Demolisher
                 ProjectileSimple projectileSimple = projectile.GetComponent<ProjectileSimple>();
                 if (projectileSimple != null)
                 {
-                    GenerateConfig(actualName, ProjectileSpeedName, projectileSimple.desiredForwardSpeed, ref demoConfigProjectile.speedConfigId);
-                    
+                    GenerateConfig(actualName, ProjectileSpeedName, projectileSimple.desiredForwardSpeed, UpdateNumber);
+                    void UpdateNumber(int id, INetworkConfig networkConfig)
+                    {
+                        projectileSimple.desiredForwardSpeed = (networkConfig as NetworkConfig<float>).Value;
+                    }
                 }
                 Rigidbody rigidbody = projectile.GetComponent<Rigidbody>();
                 if (rigidbody != null)
                 {
-                    GenerateConfig(actualName, GravityName, rigidbody.useGravity, ref demoConfigProjectile.grabityConfigId);
+                    GenerateConfig(actualName, GravityName, rigidbody.useGravity, UpdateNumber);
+                    void UpdateNumber(int id, INetworkConfig networkConfig)
+                    {
+                        rigidbody.useGravity = (networkConfig as NetworkConfig<bool>).Value;
+                    }
                 }
                 ProjectileImpactExplosion projectileImpactExplosion = projectile.GetComponent<ProjectileImpactExplosion>();
                 if (projectileImpactExplosion)
@@ -1666,26 +1723,62 @@ namespace Demolisher
                 }
                 if (rocketjumpComponent)
                 {
-                    GenerateConfig(actualName, BlastRadiusName, projectileImpactExplosion.blastRadius, ref rocketjumpComponent.blastRadiusConfigId);
-                    GenerateConfig(actualName, SelfKnockbackName, rocketjumpComponent.selfPower, ref rocketjumpComponent.selfKnockbackConfigId);
-                    GenerateConfig(actualName, EnemyKnockbackName, rocketjumpComponent.enemyPower, ref rocketjumpComponent.enemyKnockbackConfigId);
-                    GenerateConfig(actualName, ProjectileLifetimeName, projectileImpactExplosion.lifetime, ref rocketjumpComponent.lifeTimeConfigId);
+                    GenerateConfig(actualName, BlastRadiusName, projectileImpactExplosion.blastRadius, UpdateNumber);
+                    void UpdateNumber(int id, INetworkConfig networkConfig)
+                    {
+                        projectileImpactExplosion.blastRadius = (networkConfig as NetworkConfig<float>).Value;
+                    }
+                    GenerateConfig(actualName, SelfKnockbackName, rocketjumpComponent.selfPower, UpdateNumber1);
+                    void UpdateNumber1(int id, INetworkConfig networkConfig)
+                    {
+                        rocketjumpComponent.selfPower = (networkConfig as NetworkConfig<float>).Value;
+                    }
+                    GenerateConfig(actualName, EnemyKnockbackName, rocketjumpComponent.enemyPower, UpdateNumber2);
+                    void UpdateNumber2(int id, INetworkConfig networkConfig)
+                    {
+                        rocketjumpComponent.enemyPower = (networkConfig as NetworkConfig<float>).Value;
+                    }
+                    GenerateConfig(actualName, ProjectileLifetimeName, projectileImpactExplosion.lifetime, UpdateNumber3);
+                    void UpdateNumber3(int id, INetworkConfig networkConfig)
+                    {
+                        projectileImpactExplosion.lifetime = (networkConfig as NetworkConfig<float>).Value;
+                    }
                 }
                 StickyComponent stickyComponent = projectile.GetComponent<StickyComponent>();
                 if (stickyComponent != null)
                 {
-                    GenerateConfig(actualName, ArmTimeName, stickyComponent.armTime, ref stickyComponent.armTimeConfigId);
-                    GenerateConfig(actualName, FullArmTimeName, stickyComponent.fullArmTime, ref stickyComponent.fullArmTimeConfigId);
-                    GenerateConfig(actualName, FullArmTimeDamageIncreaseName, stickyComponent.damageIncrease, ref stickyComponent.damageIncreaseConfigId);
-                    GenerateConfig(actualName, FullArmTimeBlastRadiusIncreaseName, stickyComponent.radiusIncrease, ref stickyComponent.radiusIncreaseConfigId);
-                    GenerateConfig(actualName, DetonationTimeName, stickyComponent.detonationTime, ref stickyComponent.detonationTimeConfigId);
+                    GenerateConfig(actualName, ArmTimeName, stickyComponent.armTime, UpdateNumber);
+                    void UpdateNumber(int id, INetworkConfig networkConfig)
+                    {
+                        stickyComponent.actualArmTime = (networkConfig as NetworkConfig<float>).Value;
+                    }
+                    GenerateConfig(actualName, FullArmTimeName, stickyComponent.fullArmTime, UpdateNumber1);
+                    void UpdateNumber1(int id, INetworkConfig networkConfig)
+                    {
+                        stickyComponent.actualFullArmTime = (networkConfig as NetworkConfig<float>).Value;
+                    }
+                    GenerateConfig(actualName, FullArmTimeDamageIncreaseName, stickyComponent.damageIncrease, UpdateNumber2);
+                    void UpdateNumber2(int id, INetworkConfig networkConfig)
+                    {
+                        stickyComponent.actualDamageIncrease = (networkConfig as NetworkConfig<float>).Value;
+                    }
+                    GenerateConfig(actualName, FullArmTimeBlastRadiusIncreaseName, stickyComponent.radiusIncrease, UpdateNumber3);
+                    void UpdateNumber3(int id, INetworkConfig networkConfig)
+                    {
+                        stickyComponent.actualRadiusIncrease = (networkConfig as NetworkConfig<float>).Value;
+                    }
+                    GenerateConfig(actualName, DetonationTimeName, stickyComponent.detonationTime, UpdateNumber4);
+                    void UpdateNumber4(int id, INetworkConfig networkConfig)
+                    {
+                        stickyComponent.actualDetonationTime = (networkConfig as NetworkConfig<float>).Value;
+                    }
                 }
-                void GenerateConfig<T>(string name1, string name2, T defaultValue, ref int id)
+                void GenerateConfig<T>(string name1, string name2, T defaultValue, OnConfigApplied onConfigApplied)
                 {
                     string key = GenerateReplacement(name1, name2);
-                    NetworkConfig<T> config = CreateConfig<T>(ConfigFile, name1, name2, defaultValue, "", enableConfig: EnableConfig);
-                    config.OnConfigApplied = UpdateConfig;
-                    id = config.id;
+                    NetworkConfig<T> config = CreateConfig<T>(ConfigFile, name1, name2, defaultValue, "", onConfigApplied, enableConfig: EnableConfig);
+                    config.OnConfigApplied += UpdateConfig;
+                    //id = config.id;
                     tokenModifications.ReplaceOrAddValueInDictionary(key, config.Value.ToString());
                     void UpdateConfig(int id, INetworkConfig networkConfig)
                     {
@@ -1700,6 +1793,7 @@ namespace Demolisher
                 //ContentAddition.AddProjectile(projectile);
             }
         }
+
         public static ConfigEntry<bool> EnableVoicelines;
         public static ConfigEntry<float> VoicelineOnKillBaseChance;
         public static ConfigEntry<float> VoicelineOnKillChanceAddition;
@@ -1973,13 +2067,15 @@ namespace Demolisher
             LineRenderer lineRenderer = newTracer.transform.GetChild(0).GetComponent<LineRenderer>();
             LineRenderer lineRenderer2 = newTracer.transform.GetChild(1).GetComponent<LineRenderer>();
             lineRenderer.SetPosition(0, statPosition);
-            lineRenderer.SetPosition(1, endPosition);
+            lineRenderer.SetPosition(1, (endPosition + statPosition) /2);
+            lineRenderer.SetPosition(2, endPosition);
             lineRenderer.SetWidth(newWidth, newWidth);
             DemoTracer demoTracer = newTracer.AddComponent<DemoTracer>();
             demoTracer.time = fadeTime;
             demoTracer.lineRenderer = lineRenderer;
             lineRenderer2.SetPosition(0, statPosition);
-            lineRenderer2.SetPosition(1, endPosition);
+            lineRenderer2.SetPosition(1, (endPosition + statPosition) / 2);
+            lineRenderer2.SetPosition(2, endPosition);
             lineRenderer2.SetWidth(newWidth * 10, newWidth * 10);
             DemoTracer demoTracer2 = newTracer.AddComponent<DemoTracer>();
             demoTracer2.time = fadeTime;
@@ -2009,8 +2105,8 @@ namespace Demolisher
                     float percentage = stopwatch / time;
                     float newWidth = initialWidth * (1 - percentage);
                     lineRenderer.SetWidth(newWidth, newWidth);
-                    lineRenderer.startColor = new Color(1f, 1f, 1f, 1 - percentage);
-                    lineRenderer.endColor = new Color(1f, 1f, 1f, percentage);
+                    //lineRenderer.startColor = new Color(1f, 1f, 1f, 1 - percentage);
+                    //lineRenderer.endColor = new Color(1f, 1f, 1f, percentage);
                 }
             }
             public float time;
@@ -2239,6 +2335,31 @@ namespace Demolisher
                     
             }
         }
+
+        public class SuckSphereComponent : MonoBehaviour
+        {
+            public float suckPower = 6f;
+            public Dictionary<Collider, CharacterBody> keyValuePairs = new Dictionary<Collider, CharacterBody>();
+            public void OnTriggerStay(Collider collider)
+            {
+                CharacterBody characterBody = null;
+                if (!keyValuePairs.TryGetValue(collider, out characterBody))
+                {
+                    characterBody = collider.GetComponent<CharacterBody>();
+                    keyValuePairs.Add(collider, characterBody);
+                }
+                if (!characterBody) return;
+                Vector3 vector3 = (transform.position - characterBody.corePosition).normalized;
+                if (characterBody.characterMotor)
+                {
+                    characterBody.characterMotor.rootMotion += vector3 * suckPower * Time.fixedDeltaTime;
+                }
+                else if(characterBody.rigidbody)
+                {
+                    characterBody.rigidbody.AddForce(vector3 * suckPower * Time.fixedDeltaTime, ForceMode.VelocityChange);
+                }
+            }
+        }
         public class HitHelper : MonoBehaviour
         {
             private TeamFilter filter;
@@ -2266,6 +2387,19 @@ namespace Demolisher
             {
                 Camera camera = Camera.main;
                 transform.position = camera.WorldToScreenPoint(transform.position);
+            }
+        }
+        public class DemoProjectileContradictGravity : MonoBehaviour
+        {
+            public Rigidbody rigidbody;
+            public static float contradictValue = 0.2f;
+            public void Awake()
+            {
+                rigidbody = GetComponent<Rigidbody>();
+            }
+            public void Start()
+            {
+                if (rigidbody) rigidbody.velocity += Physics.gravity * contradictValue * -1;
             }
         }
         public class DemoConfigProjectile : MonoBehaviour
@@ -2310,10 +2444,10 @@ namespace Demolisher
             private Rigidbody rigidbody;
             private ProjectileController projectileController;
             private CharacterBody ownerBody;
-            public int blastRadiusConfigId;
-            public int selfKnockbackConfigId;
-            public int enemyKnockbackConfigId;
-            public int lifeTimeConfigId;
+            //public int blastRadiusConfigId;
+            //public int selfKnockbackConfigId;
+            //public int enemyKnockbackConfigId;
+            //public int lifeTimeConfigId;
 
             public void Start()
             {
@@ -2321,14 +2455,14 @@ namespace Demolisher
                 owner = projectileController ? projectileController.owner : null;
                 explosion = GetComponent<ProjectileExplosion>();
                 if (!explosion) Destroy(this);
-                explosion.blastRadius = (networkConfigs[blastRadiusConfigId] as NetworkConfig<float>).Value;
-                selfPower = (networkConfigs[selfKnockbackConfigId] as NetworkConfig<float>).Value;
-                enemyPower = (networkConfigs[enemyKnockbackConfigId] as NetworkConfig<float>).Value;
-                if (explosion is ProjectileImpactExplosion)
-                {
-                    ProjectileImpactExplosion projectileImpactExplosion = (ProjectileImpactExplosion)explosion;
-                    projectileImpactExplosion.lifetime = (networkConfigs[lifeTimeConfigId] as NetworkConfig<float>).Value;
-                }
+                //explosion.blastRadius = (networkConfigs[blastRadiusConfigId] as NetworkConfig<float>).Value;
+                //selfPower = (networkConfigs[selfKnockbackConfigId] as NetworkConfig<float>).Value;
+                //enemyPower = (networkConfigs[enemyKnockbackConfigId] as NetworkConfig<float>).Value;
+                //if (explosion is ProjectileImpactExplosion)
+                //{
+                //    ProjectileImpactExplosion projectileImpactExplosion = (ProjectileImpactExplosion)explosion;
+                //    projectileImpactExplosion.lifetime = (networkConfigs[lifeTimeConfigId] as NetworkConfig<float>).Value;
+                //}
                 teamFilter = GetComponent<TeamFilter>();
                 rigidbody = GetComponent<Rigidbody>();
                 ownerBody = owner ? owner.GetComponent<CharacterBody>() : null;
@@ -3375,12 +3509,14 @@ namespace Demolisher
             private EntityState stateType;
             private ProjectileDamage projectileDamage;
             private SkillLocator skillLocator;
+            private ProjectileImpactExplosion projectileImpactExplosion;
             public void Start()
             {
                 projectileDamage = GetComponent<ProjectileDamage>();
                 rigidbody = GetComponent<Rigidbody>();
                 owner = GetComponent<ProjectileController>().owner;
                 skillLocator = owner ? owner.GetComponent<SkillLocator>() : null;
+                projectileImpactExplosion = GetComponent<ProjectileImpactExplosion>();
                 if (skillLocator)
                 {
                     foreach (var stateMachine in skillLocator.allSkills)
@@ -3397,7 +3533,6 @@ namespace Demolisher
                         if (stateType is BombLauncher)
                         {
                             BombLauncher bombLauncher = (stateType as BombLauncher);
-                            ProjectileImpactExplosion projectileImpactExplosion = GetComponent<ProjectileImpactExplosion>();
                             if (projectileImpactExplosion)
                             {
                                 projectileImpactExplosion.lifetime = projectileImpactExplosion.lifetime * (1 - (bombLauncher.chargePercentage));
@@ -3526,20 +3661,20 @@ namespace Demolisher
             private float stopwatch = 0f;
             public abstract float armTime { get; }
             public int armTimeConfigId;
-            private float actualArmTime;
+            public float actualArmTime;
             public abstract float fullArmTime { get; }
             public int fullArmTimeConfigId;
-            private float actualFullArmTime;
+            public float actualFullArmTime;
             public abstract float damageIncrease { get; }
             public int damageIncreaseConfigId;
-            private float actualDamageIncrease;
+            public float actualDamageIncrease;
             public abstract float radiusIncrease { get; }
             public int radiusIncreaseConfigId;
-            private float actualRadiusIncrease;
+            public float actualRadiusIncrease;
             public abstract string stickyName { get; }
             public abstract float detonationTime { get; }
             public int detonationTimeConfigId;
-            private float actualDetonationTime;
+            public float actualDetonationTime;
             public abstract int maxStickies { get; }
             private bool armed = false;
             private bool fullyArmed = false;
@@ -3597,11 +3732,16 @@ namespace Demolisher
             }
             public virtual void OnEnable()
             {
-                actualArmTime = (networkConfigs[armTimeConfigId] as NetworkConfig<float>).Value;
-                actualFullArmTime = (networkConfigs[fullArmTimeConfigId] as NetworkConfig<float>).Value;
-                actualDamageIncrease = (networkConfigs[damageIncreaseConfigId] as NetworkConfig<float>).Value;
-                actualRadiusIncrease = (networkConfigs[radiusIncreaseConfigId] as NetworkConfig<float>).Value;
-                actualDetonationTime = (networkConfigs[detonationTimeConfigId] as NetworkConfig<float>).Value;
+                //actualArmTime = armTime;
+                //actualFullArmTime = fullArmTime;
+                //actualDamageIncrease = damageIncrease;
+                //actualRadiusIncrease = radiusIncrease;
+                //actualDetonationTime = detonationTime;
+                //actualArmTime = (networkConfigs[armTimeConfigId] as NetworkConfig<float>).Value;
+                //actualFullArmTime = (networkConfigs[fullArmTimeConfigId] as NetworkConfig<float>).Value;
+                //actualDamageIncrease = (networkConfigs[damageIncreaseConfigId] as NetworkConfig<float>).Value;
+                //actualRadiusIncrease = (networkConfigs[radiusIncreaseConfigId] as NetworkConfig<float>).Value;
+                //actualDetonationTime = (networkConfigs[detonationTimeConfigId] as NetworkConfig<float>).Value;
                 if (currentList != null)
                 {
                     if (demoComponent && !currentList.Contains(this)) currentList.Add(this);
@@ -3612,7 +3752,7 @@ namespace Demolisher
                 
                 projectileController = GetComponent<ProjectileController>();
                 rigidbody = GetComponent<Rigidbody>();
-                demoComponent = GetComponent<ProjectileController>().owner.GetComponent<DemoComponent>();
+                demoComponent = projectileController && projectileController.owner ? projectileController.owner.GetComponent<DemoComponent>() : null;
                 projectileImpactExplosion = GetComponent<ProjectileImpactExplosion>();
 
                 if (demoComponent)
@@ -3637,6 +3777,7 @@ namespace Demolisher
                 rangeIndicator = Instantiate(StickyRangeIndicator);
                 rangeIndicator.transform.position = transform.position;
                 rangeIndicator.transform.localScale = OneVector(projectileImpactExplosion.blastRadius);
+                actualFullArmTime /= demoComponent ? demoComponent.characterBody.attackSpeed : 1f;
             }
             public virtual void OnStickyArmed()
             {
@@ -3776,7 +3917,7 @@ namespace Demolisher
                     if (characterBody)
                     {
                         stickedCharacter = characterBody;
-                        stickedStickies = GetOrAddComponent<StickedStickies>(stickedCharacter.gameObject);
+                        stickedStickies = stickedCharacter.gameObject.GetOrAddComponent<StickedStickies>();// GetOrAddComponent<StickedStickies>(stickedCharacter.gameObject);
                         if (!stickedStickies.stickyComponents.Contains(this)) stickedStickies.stickyComponents.Add(this);
                     }
                     rigidbody.constraints = RigidbodyConstraints.FreezeAll;
@@ -3861,7 +4002,7 @@ namespace Demolisher
 
             public override int maxStickies => 8;
 
-            public override float fullArmTime => 3f;
+            public override float fullArmTime => 4f;
 
             public override float damageIncrease => 1.5f;
 
@@ -3879,7 +4020,7 @@ namespace Demolisher
 
             public override int maxStickies => 4;
 
-            public override float fullArmTime => 3f;
+            public override float fullArmTime => 4f;
 
             public override float damageIncrease => 1.5f;
 
@@ -4066,6 +4207,13 @@ namespace Demolisher
             public void LateUpdate()
             {
                 transform.rotation = Quaternion.identity;
+            }
+        }
+        public class DontRotateCharacter : MonoBehaviour
+        {
+            public void LateUpdate()
+            {
+                transform.eulerAngles = new Vector3(0f, transform.eulerAngles.y, 0f);
             }
         }
 
@@ -4589,11 +4737,13 @@ namespace Demolisher
         {
             T skillDef = AddSkill<T>(state, "Weapon", sprite, name, nameToken, descToken, keyWords, baseStock, rechargeInterval, false, false, false, true, InterruptPriority.Any, true, false, requiredStock, rechargeStock, stockToConsume, demoPrimaryFamily);
             swordDictionary.Add(skillDef, demoSword);
+            
             return skillDef;
         }
         public static SkillDef GrenadeLauncherInit(Type state, Sprite sprite, string name, string nameToken, string descToken, string[] keyWordTokens, bool isSticky = false, int baseStocks = 4, float rechargeInterval = 4f, int requiredStock = 1, int rechargeStock = 1, int stockToConsume = 1)
         {
             SkillDef skillDef = GrenadeLauncherInit<SkillDef>(state, sprite, name, nameToken, descToken, keyWordTokens, isSticky, baseStocks, rechargeInterval, requiredStock, rechargeStock, stockToConsume);
+            skillsBonusStocksMultiplier.Add(skillDef, baseStocks);
             return skillDef;
         }
         public static T GrenadeLauncherInit<T>(Type state, Sprite sprite, string name, string nameToken, string descToken, string[] keyWordTokens, bool isSticky = false, int baseStocks = 4, float rechargeInterval = 4f, int requiredStock = 1, int rechargeStock = 1, int stockToConsume = 1) where T : SkillDef
@@ -5486,6 +5636,7 @@ namespace Demolisher
             private Image chargeMeter;
             private bool changeMeter = true;
             private Rigidbody rigidbody;
+            private ProjectileSimple projectileSimple;
             public float chargePercentage
             {
                 get { return charge / chargeCap; }
@@ -5523,6 +5674,7 @@ namespace Demolisher
 
                 }
                 rigidbody = projectile.GetComponent<Rigidbody>();
+                projectileSimple = projectile.GetComponent<ProjectileSimple>();
             }
             public virtual void FireProjectile(bool stopCharge = true)
             {
@@ -5536,15 +5688,15 @@ namespace Demolisher
                 }
                 TrajectoryAimAssist.ApplyTrajectoryAimAssist(ref aimRay, projectile, base.gameObject, 1f);
                 if (canBeCharged) Util.PlaySound(DemoCannonChargeSound.stopSoundString, gameObject);
-
                 if (isAuthority)
                 {
                     Vector3 rotat = aimRay.direction;
                     Vector3 groundedRotat = new Vector3(rotat.x, 0, rotat.z).normalized;
-                    if (rigidbody.useGravity && !Physics.Raycast(aimRay, 3.5f, LayerIndex.world.mask + LayerIndex.entityPrecise.mask, QueryTriggerInteraction.UseGlobal))
-                    {
-                        rotat = Quaternion.AngleAxis(-5.5f, (Quaternion.AngleAxis(90f, Vector3.up) * groundedRotat)) * rotat;
-                    }
+                    //if (rigidbody.useGravity && !Physics.Raycast(aimRay, 3.5f, LayerIndex.world.mask + LayerIndex.entityPrecise.mask, QueryTriggerInteraction.UseGlobal))
+                    //{
+                    //    rotat = Quaternion.AngleAxis(-5.5f, (Quaternion.AngleAxis(90f, Vector3.up) * groundedRotat)) * rotat;
+                    //}
+                    float projectileSpeedOverride = chargeTags.Contains(GrenadeLauncherChargeAffection.Speed) ? projectileSimple.desiredForwardSpeed * (1 + chargePercentage) : -1f;
                     FireProjectileInfo fireProjectileInfo = new FireProjectileInfo
                     {
                         projectilePrefab = projectile,
@@ -5554,7 +5706,8 @@ namespace Demolisher
                         damage = damage * this.damageStat * (chargeTags.Contains(GrenadeLauncherChargeAffection.Damage) ? 1 + chargePercentage : 1),
                         force = 1f,
                         crit = Util.CheckRoll(this.critStat, base.characterBody.master),
-                        speedOverride = chargeTags.Contains(GrenadeLauncherChargeAffection.Speed) ? projectile.GetComponent<ProjectileSimple>().desiredForwardSpeed * (1 + chargePercentage) : -1f,
+                        speedOverride = projectileSpeedOverride,
+                        useSpeedOverride = chargeTags.Contains(GrenadeLauncherChargeAffection.Speed),
                         damageTypeOverride = new DamageTypeCombo?(new DamageTypeCombo(DamageType.Generic, DamageTypeExtended.Generic, GetDamageSource()))
                     };
                     ModifiyProjectileFireInfo(ref fireProjectileInfo);
@@ -6193,6 +6346,8 @@ namespace Demolisher
             private Vector3 currentVector = Vector3.zero;
             public Vector3 rotationVector = Vector3.zero;
             public EntityStateMachine previousStateMachine;
+            public GameObject suckSphere;
+            public GameObject suckVFXclone;
             public override void OnEnter()
             {
                 base.OnEnter();
@@ -6202,17 +6357,38 @@ namespace Demolisher
                 currentVector = inputBank ? inputBank.moveVector : transform.forward;
                 if (NetworkServer.active)
                     characterBody.AddBuff(RoR2Content.Buffs.SmallArmorBoost);
+                suckSphere = new GameObject("SuckSphere");
+                SphereCollider sphereCollider2 = suckSphere.AddComponent<SphereCollider>();
+                sphereCollider2.isTrigger = true;
+                sphereCollider2.radius = 2;
+                SuckSphereComponent suckSphereComponent = suckSphere.AddComponent<SuckSphereComponent>();
+                suckSphereComponent.suckPower = 18f;
+                suckSphere.layer = LayerIndex.collideWithCharacterHullOnly.intVal;
+                suckSphere.transform.SetParent(characterBody.transform, false);
+                suckSphere.transform.position = characterBody.corePosition;
+                suckSphere.transform.localScale = OneVector(18f);
+                suckVFXclone = GameObject.Instantiate(SuckEffect);
+                suckVFXclone.transform.localScale = OneVector(18f);
+                suckVFXclone.transform.position = characterBody.corePosition;
             }
             public override void OnExit()
             {
                 base.OnExit();
                 if (NetworkServer.active)
                     characterBody.RemoveBuff(RoR2Content.Buffs.SmallArmorBoost);
+                if (suckSphere) Destroy(suckSphere);
+                if(suckVFXclone) StopAndDestroyVFX(suckVFXclone, 1f);
                 if (previousStateMachine != null) previousStateMachine.SetNextStateToMain();
             }
             public virtual void OnFullRotation()
             {
                 hitStopwatch = 0f;
+            }
+            public override void Update()
+            {
+                base.Update();
+                if(suckVFXclone && characterBody)
+                suckVFXclone.transform.position = characterBody.corePosition;
             }
             public override void FixedUpdate()
             {
@@ -6682,7 +6858,7 @@ namespace Demolisher
                             {
                                 attacker = gameObject,
                                 attackerFiltering = AttackerFiltering.Default,
-                                baseDamage = characterBody.damage * 20,
+                                baseDamage = characterBody.damage * 80,
                                 baseForce = 3f,
                                 bonusForce = Vector3.up,
                                 canRejectForce = true,
@@ -6912,7 +7088,7 @@ namespace Demolisher
                     bool onlyAllowMovement;
                     if (PlayerCharacterMasterController.CanSendBodyInput(playerCharacterMasterController.networkUser, out localUser, out player, out cameraRigController, out onlyAllowMovement))
                     {
-                        if (player.GetButtonDown(7) && attack) Leap();
+                        if (player.GetButtonDown(7) && attack) { attack = false; new LeapNetMessage(characterBody.netId).Send(NetworkDestination.Clients); };
                         if (!attack && player.GetButtonUp(7)) attack = true;
                         if (player.GetButtonDown(10) && isAuthority) endState = true;
                     }
@@ -6921,6 +7097,7 @@ namespace Demolisher
             }
             public void Leap()
             {
+                Ray ray = GetAimRay();
                 activatorSkillSlot.stock--;
                 switchCameraSide = !switchCameraSide;
                 if (cameraTargetParams)
@@ -6942,13 +7119,13 @@ namespace Demolisher
                     };
                     cameraParamsOverrideHandle = cameraTargetParams.AddParamsOverride(cameraParamsOverrideRequest, 0f);
                 }
-                Vector3 finalPosition = Physics.Raycast(GetAimRay(), out RaycastHit hitInfo, distance, LayerIndex.world.mask, QueryTriggerInteraction.UseGlobal) ? hitInfo.point : GetAimRay().origin + (GetAimRay().direction * distance);
+                Vector3 finalPosition = Physics.Raycast(ray, out RaycastHit hitInfo, distance, LayerIndex.world.mask, QueryTriggerInteraction.UseGlobal) ? hitInfo.point : ray.origin + (ray.direction * distance);
                 if (isAuthority)
                 {
                     BulletAttack bulletAttack2 = new BulletAttack()
                     {
                         radius = 3f,
-                        aimVector = GetAimRay().direction,
+                        aimVector = ray.direction,
                         damage = base.damageStat * bulletAttack.damage * 2,
                         bulletCount = 1,
                         spreadPitchScale = 0f,
@@ -6965,7 +7142,7 @@ namespace Demolisher
                         falloffModel = BulletAttack.FalloffModel.None,
                         damageColorIndex = DamageColorIndex.Default,
                         isCrit = RollCrit(),
-                        origin = GetAimRay().origin,
+                        origin = ray.origin,
                         owner = gameObject,
                         hitCallback = bulletAttack.hitCallback + effectHitCallback,
 
@@ -6975,13 +7152,12 @@ namespace Demolisher
                 if (characterDirection)
                 {
                     Vector3 direction = finalPosition - transform.position;
+                    characterDirection.forward = direction.normalized;
                     characterDirection.targetVector = direction.normalized;
                 }
                 SimpleTracer(transform.position, finalPosition);
                 Util.PlaySound(EntityStates.ImpMonster.BlinkState.beginSoundString, base.gameObject);
-                TeleportHelper.TeleportBody(characterBody, finalPosition, false);
-                
-                attack = false;
+                TeleportHelper.TeleportBody(characterBody, finalPosition, false);;
                 if (activatorSkillSlot.stock <= 0 && isAuthority) endState = true;
             }
             public override void OnExit()
