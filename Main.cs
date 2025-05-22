@@ -18,6 +18,7 @@ using RoR2.Skills;
 using Demolisher;
 using static Demolisher.Skills;
 using static Demolisher.Main;
+using static Demolisher.Components;
 using static Demolisher.ContentPacks;
 using Newtonsoft.Json.Utilities;
 using RoR2.HudOverlay;
@@ -44,6 +45,7 @@ using NetworkConfigs;
 using UnityEngine.Video;
 using static UnityEngine.SendMouseEvents;
 using RiskOfOptions.Lib;
+using DemolisherComponents;
 [assembly: SecurityPermission(SecurityAction.RequestMinimum, SkipVerification = true)]
 [assembly: HG.Reflection.SearchableAttribute.OptIn]
 [assembly: HG.Reflection.SearchableAttribute.OptInAttribute]
@@ -67,7 +69,7 @@ namespace Demolisher
     {
         public const string ModGuid = "com.brynzananas.demolisher";
         public const string ModName = "Demolisher";
-        public const string ModVer = "1.0.4";
+        public const string ModVer = "0.3.0";
 
         private static bool emotesEnabled;
         private static bool loadoutSkillTitlesEnabled;
@@ -85,6 +87,7 @@ namespace Demolisher
         public static Dictionary<SkillDef, int> skillsBonusStocksMultiplier = new Dictionary<SkillDef, int>();
         public static List<string> tokensToModify = new List<string>();
         public static SurvivorDef DemoSurvivorDef;
+        public static GameObject DemoMaster;
         public static BodyIndex DemoBodyIndex;
         public static SkinDef DemoDefaultSkin;
         public static SkinDef DemoNuclearSkin;
@@ -158,6 +161,8 @@ namespace Demolisher
             //On.RoR2.UI.LogBook.PageBuilder.AddBodyLore += PageBuilder_AddBodyLore;
             Run.onClientGameOverGlobal += Run_onClientGameOverGlobal;
             On.RoR2.GenericSkill.SetBonusStockFromBody += GenericSkill_SetBonusStockFromBody;
+            EntityStates.SurvivorPod.Release.onEnter += Release_onEnter;
+            On.EntityStates.SpawnTeleporterState.OnExit += SpawnTeleporterState_OnExit;
             ContentManager.collectContentPackProviders += (addContentPackProvider) =>
             {
                 addContentPackProvider(new ContentPacks());
@@ -166,7 +171,28 @@ namespace Demolisher
             {
                 LoadoutSkillTitlesCompatability.AddCompatability();
             }
-            
+
+        }
+    
+
+        private void SpawnTeleporterState_OnExit(On.EntityStates.SpawnTeleporterState.orig_OnExit orig, SpawnTeleporterState self)
+        {
+            orig(self);
+            if(self.isAuthority)
+            if (self.characterBody.bodyIndex == DemoBodyIndex)
+            {
+                DemoVoicelinesComponent demoVoicelinesComponent = self.GetComponent<DemoVoicelinesComponent>();
+                if (demoVoicelinesComponent) demoVoicelinesComponent.PlayReleaseAudio();
+            }
+        }
+
+        private void Release_onEnter(EntityStates.SurvivorPod.Release arg1, CharacterBody arg2)
+        {
+            if (arg2.bodyIndex == DemoBodyIndex)
+            {
+                DemoVoicelinesComponent demoVoicelinesComponent = arg2.GetComponent<DemoVoicelinesComponent>();
+                if(demoVoicelinesComponent) demoVoicelinesComponent.PlayReleaseAudio();
+            }
         }
 
         private void GenericSkill_SetBonusStockFromBody(On.RoR2.GenericSkill.orig_SetBonusStockFromBody orig, GenericSkill self, int newBonusStockFromBody)
@@ -550,14 +576,34 @@ namespace Demolisher
 
             }
         }
+        public class PlayVoicelineNetMessage : INetMessage
+        {
+            NetworkInstanceId instanceId;
+            public void Deserialize(NetworkReader reader)
+            {
+                throw new NotImplementedException();
+            }
+
+            public void OnReceived()
+            {
+                throw new NotImplementedException();
+            }
+
+            public void Serialize(NetworkWriter writer)
+            {
+                throw new NotImplementedException();
+            }
+        }
         public class PlaySoundNetMessage : INetMessage
         {
             NetworkInstanceId instanceId;
             string sound;
-            public PlaySoundNetMessage(NetworkInstanceId networkInstanceId, string soundString)
+            bool isVoiceline;
+            public PlaySoundNetMessage(NetworkInstanceId networkInstanceId, string soundString, bool isVoiceline)
             {
                 instanceId = networkInstanceId;
                 sound = soundString;
+                this.isVoiceline = isVoiceline;
             }
             public PlaySoundNetMessage()
             {
@@ -567,11 +613,12 @@ namespace Demolisher
             {
                 instanceId = reader.ReadNetworkId();
                 sound = reader.ReadString();
+                isVoiceline = reader.ReadBoolean();
             }
 
             public void OnReceived()
             {
-                if (!EnableVoicelines.Value) return;
+                if (isVoiceline && !EnableVoicelines.Value) return;
                 GameObject gameObject = Util.FindNetworkObject(instanceId);
                 if (!gameObject) return;
                 Util.PlaySound(sound, gameObject);
@@ -581,6 +628,7 @@ namespace Demolisher
             {
                 writer.Write(instanceId);
                 writer.Write(sound);
+                writer.Write(isVoiceline);
             }
         }
         public class UngroundNetMessage : INetMessage
@@ -767,12 +815,50 @@ namespace Demolisher
                 writer.Write(scale);
             }
         }
+        public class SimpleTracerNetMessage : INetMessage
+        {
+            Vector3 startPosition;
+            Vector3 endPosition;
+            float width;
+            float time;
+            public SimpleTracerNetMessage(Vector3 startPosition, Vector3 endPosition, float width = 1f, float time = 0.3f)
+            {
+                this.startPosition = startPosition;
+                this.endPosition = endPosition;
+                this.width = width;
+                this.time = time;
+            }
+            public SimpleTracerNetMessage()
+            {
+
+            }
+            public void Deserialize(NetworkReader reader)
+            {
+                startPosition = reader.ReadVector3();
+                endPosition = reader.ReadVector3();
+                width = reader.ReadSingle();
+                time = reader.ReadSingle();
+
+            }
+
+            public void OnReceived()
+            {
+                SimpleTracer(startPosition, endPosition, width, time);
+            }
+
+            public void Serialize(NetworkWriter writer)
+            {
+                writer.Write(startPosition); writer.Write(endPosition); writer.Write(width); writer.Write(time);
+            }
+        }
         public class LeapNetMessage : INetMessage
         {
             NetworkInstanceId networkInstanceId;
-            public LeapNetMessage(NetworkInstanceId networkInstanceId)
+            Vector3 finalPosition;
+            public LeapNetMessage(NetworkInstanceId networkInstanceId, Vector3 finalPosition)
             {
                 this.networkInstanceId = networkInstanceId;
+                this.finalPosition = finalPosition;
             }
             public LeapNetMessage()
             {
@@ -781,6 +867,7 @@ namespace Demolisher
             public void Deserialize(NetworkReader reader)
             {
                 networkInstanceId = reader.ReadNetworkId();
+                finalPosition = reader.ReadVector3();
             }
 
             public void OnReceived()
@@ -793,13 +880,14 @@ namespace Demolisher
                 if(skillLocator == null) return;
                 foreach(var skill in skillLocator.allSkills)
                 {
-                    if (skill && skill.stateMachine && skill.stateMachine.state != null && skill.stateMachine.state is UltraInstinctFinal) (skill.stateMachine.state as UltraInstinctFinal).Leap();
+                    if (skill && skill.stateMachine && skill.stateMachine.state != null && skill.stateMachine.state is UltraInstinctFinal) { (skill.stateMachine.state as UltraInstinctFinal).LeapGlobal(finalPosition); break; };
                 }
             }
 
             public void Serialize(NetworkWriter writer)
             {
                 writer.Write(networkInstanceId);
+                writer.Write(finalPosition);
             }
         }
         public class TimeScaleChangeNetMessage : INetMessage
@@ -1171,7 +1259,7 @@ namespace Demolisher
             //}
             orig(self, owner, icon, titleToken, bodyToken, tooltipColor, callback, unlockableName, viewableNode, isWIP, defIndex);
         }
-
+        
         private void CharacterMotor_OnMovementHit(On.RoR2.CharacterMotor.orig_OnMovementHit orig, CharacterMotor self, Collider hitCollider, Vector3 hitNormal, Vector3 hitPoint, ref HitStabilityReport hitStabilityReport)
         {
             orig(self, hitCollider, hitNormal, hitPoint, ref hitStabilityReport);
@@ -1221,7 +1309,7 @@ namespace Demolisher
 
         private void Main_skillsToStatsEvent(CharacterBody arg1, RecalculateStatsAPI.StatHookEventArgs arg2, GenericSkill arg3)
         {
-            DemoComponent demoComponent = arg1.GetComponent<DemoComponent>();
+            DemoComponent demoComponent = (arg1 is DemoCharacterBody) ? (arg1 as DemoCharacterBody).demoComponent : null;
             SkillDef skillDef = arg3.skillDef;
             if (skillDef != null)
             {
@@ -1387,9 +1475,9 @@ namespace Demolisher
             bool validForUpgrade = victimBody && (victimBody.isChampion || victimBody.isBoss) ? victimBody.HasBuff(UpgradeOnKill) : false;
             bool victimZatoichi = victimBody ? victimBody.HasBuff(HealOnKill) : false;
             bool attackerZatoichi = self ? self.HasBuff(HealOnKill) : false;
-            if (self.bodyIndex == DemoBodyIndex)
+            if (self.bodyIndex == DemoBodyIndex && self is DemoCharacterBody)
             {
-                DemoVoicelinesComponent demoVoicelinesComponent = self.GetComponent<DemoVoicelinesComponent>();
+                DemoVoicelinesComponent demoVoicelinesComponent = (self as DemoCharacterBody).demoVoicelinesComponent;
                 demoVoicelinesComponent.RegisterKill(victimBody, damageReport);
             }
             orig(self, damageReport);
@@ -1795,13 +1883,17 @@ namespace Demolisher
         }
 
         public static ConfigEntry<bool> EnableVoicelines;
+        public static ConfigEntry<bool> VoicelineOnKill;
         public static ConfigEntry<float> VoicelineOnKillBaseChance;
         public static ConfigEntry<float> VoicelineOnKillChanceAddition;
+        public static ConfigEntry<bool> VoicelineOnDeath;
+        public static ConfigEntry<bool> VoicelineOnPodExit;
         private static void CreateDemoConfigs()
         {
-            EnableVoicelines = ConfigFile.Bind<bool>("Main", "Enable voicelines?", true, "Enables Demolisher voicelines (client side)");
-            VoicelineOnKillBaseChance = ConfigFile.Bind<float>("Main", "Voiceline on kill base chance", 5f, "Control the base chance of voiceline playing on kill (server side)");
-            VoicelineOnKillChanceAddition = ConfigFile.Bind<float>("Main", "Voiceline on kill chance addition", 5f, "Control the chance addition of voiceline playing on kill (server side). Additional chance resets on voiceline play");
+            EnableVoicelines = ConfigFile.Bind<bool>("Voicelines", "Enable voicelines?", true, "Enables Demolisher voicelines (client side)");
+            //VoicelineOnKill = ConfigFile.Bind<bool>("Voicelines", "Enable voicelines on kill?", true "")
+            VoicelineOnKillBaseChance = ConfigFile.Bind<float>("Voicelines", "Voiceline on kill base chance", 5f, "Control the base chance of voiceline playing on kill (server side)");
+            VoicelineOnKillChanceAddition = ConfigFile.Bind<float>("Voicelines", "Voiceline on kill chance addition", 5f, "Control the chance addition of voiceline playing on kill (server side). Additional chance resets on voiceline play");
             if (riskOfOptionsEnabled)
             {
                 RiskOfOptionsCompatability.AddBoolConfig(EnableVoicelines);
@@ -1830,15 +1922,14 @@ namespace Demolisher
                 "\r\n\r\n< ! > Specials can utilise primary selection and base their effects from them.");
             LanguageAPI.Add("DEMOLISHER_OUTRO_FLAVOR", "And so he left... enjoying every moment of it...");
             LanguageAPI.Add("DEMOLISHER_OUTRO_FAILURE", "If he was a good Demolisher... maybe he could escape...");
-            CharacterBody demoCharacterBody = DemoBody.GetComponent<CharacterBody>();
+            DemoCharacterBody demoCharacterBody = DemoBody.GetComponent<DemoCharacterBody>();
             demoCharacterBody.preferredPodPrefab = LegacyResourcesAPI.Load<GameObject>("Prefabs/NetworkedObjects/SurvivorPod");//Addressables.LoadAssetAsync<GameObject>("RoR2/Base/SurvivorPod/SurvivorPod.prefab").WaitForCompletion();
             demoCharacterBody._defaultCrosshairPrefab = LegacyResourcesAPI.Load<GameObject>("Prefabs/Crosshair/SimpleDotCrosshair");// Addressables.LoadAssetAsync<GameObject>("RoR2/Base/UI/StandardCrosshair.prefab").WaitForCompletion();
             GameObject gameObject = DemoBody.GetComponent<ModelLocator>().modelTransform.gameObject;
             gameObject.GetComponent<FootstepHandler>().footstepDustPrefab = LegacyResourcesAPI.Load<GameObject>("Prefabs/GenericFootstepDust");//Addressables.LoadAssetAsync<GameObject>("RoR2/Base/Common/VFX/GenericFootstepDust.prefab").WaitForCompletion();
-            var component = DemoBody.AddComponent<DemoComponent>();
-            var component2 = DemoBody.AddComponent<DemoVoicelinesComponent>();
-            component2.networkBehaviour = DemoBody.GetComponent<NetworkBehaviour>();
-            var skillLocator = DemoBody.GetComponent<SkillLocator>();
+            var component = demoCharacterBody.demoComponent;
+            var component2 = demoCharacterBody.demoVoicelinesComponent;
+            var skillLocator = demoCharacterBody.skillLocator;
             GameObject hudObject = ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/DemoExtraCrosshairReworkSimplified.prefab");
             DemoBody.GetComponent<CharacterDeathBehavior>().deathState = new SerializableEntityStateType((typeof(DemoDeathState)));
             hudObject.transform.localScale = new Vector3(-1.4f, 1.4f, 1.4f);
@@ -1889,12 +1980,12 @@ namespace Demolisher
                     //NuclearSizeIncreaseComponent nuclearSizeIncreaseComponent = characterModel.GetComponent<NuclearSizeIncreaseComponent>();
                     if (true)
                     {
-                        characterModel.transform.localScale += OneVector(0.35f);
+                        characterModel.transform.localScale *= 1.2f;
                         NuclearSizeIncreaseComponent nuclearSizeIncreaseComponent2 = characterModel.gameObject.AddComponent<NuclearSizeIncreaseComponent>();
                         activePartsComponent.components.Add(nuclearSizeIncreaseComponent2);
                         if (emotesEnabled)
                         {
-                            EmoteCompatAbility.EmoteCompatabilityModelPartSizeSet(characterModel.gameObject, 0.3f);
+                            EmoteCompatAbility.EmoteCompatabilityModelPartSizeSet(characterModel.gameObject, 1.2f);
                         }
                     }
                 }
@@ -1904,6 +1995,8 @@ namespace Demolisher
             bodies.Add(DemoBody);
             DemoSurvivorDef = Main.ThunderkitAssets.LoadAsset<SurvivorDef>("Assets/Demoman/DemoSurvivor.asset");
             survivors.Add(DemoSurvivorDef);
+            DemoMaster = Main.ThunderkitAssets.LoadAsset<GameObject>("Assets/Demoman/DemolisherMonsterMaster.prefab");
+            masters.Add(DemoMaster);
             if (emotesEnabled)
             {
                 EmoteCompatAbility.EmoteCompatability();
@@ -1914,7 +2007,11 @@ namespace Demolisher
         {
             public void OnDestroy()
             {
-                transform.localScale -= OneVector(0.35f);
+                transform.localScale /= 1.3f;
+                if (emotesEnabled)
+                {
+                    EmoteCompatAbility.EmoteCompatabilityModelPartSizeSet(gameObject, 1 / 1.2f);
+                }
             }
         }
         public static DemoSoundClass DemoChargeHitFleshSound = new DemoSoundClass("DemoChargeFleshHit");
@@ -1948,11 +2045,13 @@ namespace Demolisher
         public static DemoSoundClass DemoLaughterSound = new DemoSoundClass("DemoLaugh");
         public static DemoSoundClass DemoTauntSound = new DemoSoundClass("DemoTaunt");
         public static DemoSoundClass DemoDeathSound = new DemoSoundClass("DemoDeath");
-        public static DemoVoiceline DemoKillVoiceline = new DemoVoiceline(DemoKillSound, new DemoVoicelineType[] { DemoVoicelineType.Kill }, 9);
-        public static DemoVoiceline DemoTrapKillVoiceline = new DemoVoiceline(DemoTrapKillSound, new DemoVoicelineType[] { DemoVoicelineType.TrapKill, DemoVoicelineType.Kill }, 6);
+        public static DemoSoundClass DemoLandingSound = new DemoSoundClass("DemoLanding");
+        public static DemoVoiceline DemoKillVoiceline = new DemoVoiceline(DemoKillSound, new DemoVoicelineType[] { DemoVoicelineType.Kill, DemoVoicelineType.TrapKill }, 9);
+        public static DemoVoiceline DemoTrapKillVoiceline = new DemoVoiceline(DemoTrapKillSound, new DemoVoicelineType[] { DemoVoicelineType.TrapKill }, 6);
         public static DemoVoiceline DemoLaughterVoiceline = new DemoVoiceline(DemoLaughterSound, new DemoVoicelineType[] { DemoVoicelineType.Kill, DemoVoicelineType.Laugh }, 8);
         public static DemoVoiceline DemoTauntVoiceline = new DemoVoiceline(DemoTauntSound, new DemoVoicelineType[] { DemoVoicelineType.Kill, DemoVoicelineType.TrapKill }, 4);
         public static DemoVoiceline DemoDeathVoiceline = new DemoVoiceline(DemoDeathSound, new DemoVoicelineType[] { DemoVoicelineType.Death }, 5);
+        public static DemoVoiceline DemoLandingVoiceline = new DemoVoiceline(DemoLandingSound, new DemoVoicelineType[] { DemoVoicelineType.Landing }, 5);
         private static void CreateSounds()
         {
 
@@ -2399,7 +2498,7 @@ namespace Demolisher
             }
             public void Start()
             {
-                if (rigidbody) rigidbody.velocity += Physics.gravity * contradictValue * -1;
+                if (rigidbody && rigidbody.useGravity) rigidbody.velocity += Physics.gravity * contradictValue * -1;
             }
         }
         public class DemoConfigProjectile : MonoBehaviour
@@ -2949,7 +3048,7 @@ namespace Demolisher
             public override void OnEnter()
             {
                 base.OnEnter();
-                demoComponent = GetComponent<DemoComponent>();
+                demoComponent = (characterBody as DemoCharacterBody).demoComponent;
             }
             public override bool CanExecuteSkill(GenericSkill skillSlot)
             {
@@ -2968,465 +3067,8 @@ namespace Demolisher
                 }
             }
         }
-        public class DemoComponent : MonoBehaviour
-        {
-            public List<Renderer> renderers;
-            public Dictionary<string, List<StickyComponent>> stickies = new Dictionary<string, List<StickyComponent>>();
-            public int noLimitStickies = 0;
-            public int maxAdditionalStickies = 0;
-            public float additionalArmTime = 0f;
-            private InputBankTest inputBank;
-            private SkillLocator skillLocator;
-            public int secondaryStocks = 0;
-            public float secondaryCooldown = 0f;
-            public int primaryStocks = 0;
-            public float primaryCooldown = 0f;
-            public int primaryReplaceStocks = 0;
-            public float primaryReplaceCooldown = 0f;
-            public GenericSkill primaryReplace;
-            public GenericSkill utilityReplace;
-            public GenericSkill secondaryReplace;
-            public GenericSkill specialReplace;
-            public GameObject chargeMeter;
-            public OverlayController overlayController;
-            public bool updateMeter = true;
-            public GameObject hudObject;
-            public GameObject altCrosshair;
-            public ChildLocator childLocator;
-            public CharacterModel characterModel;
-            public CharacterBody characterBody;
-            private CrosshairUtils.OverrideRequest overrideRequest;
-            public Transform primarystockCounter;
-            public Image primaryStopwatch;
-            public Transform secondarystockCounter;
-            public Image secondaryStopwatch;
-            public Image leftMeter;
-            public Image rightMeter;
-            public Image leftMeterBase;
-            public Image rightMeterBase;
-            //public Image baseMeter;
-            public TextMeshProUGUI stickyText;
-            public TextMeshProUGUI extraPrimaryText;
-            public TextMeshProUGUI extraSecondaryText;
-            private GenericSkill trackStickies;
-            private GenericSkill trackSword;
-            private GenericSkill trackUtility;
-            private CameraTargetParams cameraTargetParams;
-            public bool canUseUtility = true;
-            public float canUseUtilityTimer = 0f;
-            public bool canUseSecondary = true;
-            public float canUseSecondaryTimer = 0f;
-            public bool useUtility;
-            public EntityStateMachine bodyStateMachine;
-            public GameObject swordObject;
-            public GameObject shieldObject;
-            public CrosshairController.SpritePosition[] spritePositions;
-            private bool isUtilitydown = false;
-            private bool wasUtilitydown = false;
-            public GmodPropDef currentProp;
-            public Image currentPropImage;
-            public OverlayController gmodOverlayController;
-            public GameObject gmodPropsListObject;
-            public int index = 0;
-            public int stickyCount
-            {
-                get
-                {
-                    int count = 0;
-                    foreach (var stickyClass in stickies)
-                    {
-                        count += stickyClass.Value.Count;
-                    }
-                    return count;
-                }
-            }
-            public bool isSwapped
-            {
-                get
-                {
-                    if (skillLocator && stickySkills.Contains(skillLocator.primary.baseSkill))
-                    {
-                        return true;
-                    }
-                    else
-                    {
-                        return false;
-                    }
-                }
-            }
-            public void Awake()
-            {
-                inputBank = gameObject.GetComponent<InputBankTest>();
-                skillLocator = gameObject.GetComponent<SkillLocator>();
-                primaryReplace = skillLocator.FindSkillByFamilyName("DemoStickies");
-                primaryReplace.RecalculateValues();
-                trackStickies = primaryReplace;
-                SkillDef detonateSkill = DetonateSkillDef;
-                if (customDetonationSkills.ContainsKey(primaryReplace.baseSkill)) detonateSkill = customDetonationSkills[primaryReplace.baseSkill];
-                utilityReplace = skillLocator.FindSkillByFamilyName("DemoDetonate");
-                utilityReplace.RecalculateValues();
-                trackUtility = skillLocator.utility;
-
-                childLocator = gameObject.GetComponent<ModelLocator>().modelTransform.GetComponent<ChildLocator>();
-                characterBody = GetComponent<CharacterBody>();
-                characterModel = characterBody.modelLocator.modelTransform.GetComponent<CharacterModel>();
-
-                if (stickies.ContainsKey("All"))
-                {
-
-                }
-                else
-                {
-                    stickies.Add("All", new List<StickyComponent>());
-                }
-                cameraTargetParams = GetComponent<CameraTargetParams>();
-                EntityStateMachine[] entityStateMachines = GetComponents<EntityStateMachine>();
-                if (entityStateMachines != null)
-                {
-                    foreach (EntityStateMachine entityStateMachine in entityStateMachines)
-                    {
-                        if (entityStateMachine != null && entityStateMachine.customName == "Body")
-                        {
-                            bodyStateMachine = entityStateMachine;
-                        }
-                    }
-                }
-            }
-            public void OnEnable()
-            {
-
-                GetComponent<ModelLocator>().modelTransform.GetComponent<DynamicBone>().m_Weight = 0.07f;
-                //CrosshairController controller = chargeMeter.GetComponent<CrosshairController>();
-                //controller.hudElement.targetBodyObject = gameObject;
-                //controller.hudElement.targetCharacterBody = characterBody;
-                OverlayCreationParams overlayCreationParams = new OverlayCreationParams
-                {
-                    prefab = chargeMeter,
-                    childLocatorEntry = "CrosshairExtras"
-                };
-                this.overlayController = HudOverlayManager.AddOverlay(base.gameObject, overlayCreationParams);
-                this.overlayController.onInstanceAdded += OnOverlayInstanceAdded;
-                this.overlayController.onInstanceRemove += OnOverlayInstanceRemoved;
-                return;
-                OverlayCreationParams overlayCreationParams2 = new OverlayCreationParams
-                {
-                    prefab = GmodHud,
-                    childLocatorEntry = "CrosshairExtras"
-                };
-                this.gmodOverlayController = HudOverlayManager.AddOverlay(base.gameObject, overlayCreationParams2);
-                this.gmodOverlayController.onInstanceAdded += OnOverlayInstanceAdded;
-                this.gmodOverlayController.onInstanceRemove += OnOverlayInstanceRemoved;
-                //meterImage = overlayController.instancesList[0].GetComponent<Image>();
-            }
-
-            private void OnOverlayInstanceRemoved(OverlayController controller, GameObject @object)
-            {
-                //meterImage = controller.instancesList[0].GetComponent<Image>();
-            }
-            public void DetonateNoLimitStickies()
-            {
-                if (stickies.ContainsKey("All"))
-                {
-                    while (stickies["All"].Count > 0)
-                    {
-                        for (int i = 0; i < stickies["All"].Count; i++)
-                        {
-                            stickies["All"][i].DetonateSticky(0);
-                        }
-                    }
-                }
-            }
-            private void OnOverlayInstanceAdded(OverlayController controller, GameObject @object)
-            {
-            }
-
-            public void UpdateHudObject()
-            {
-                if (hudObject)
-                {
-                    if (isSwapped)
-                    {
-                        if (altCrosshair)
-                        {
-                            overrideRequest = CrosshairUtils.RequestOverrideForBody(characterBody, altCrosshair, CrosshairUtils.OverridePriority.Skill);
-                        }
-
-                        //baseMeter.sprite = StickyIndicator;
-                        leftMeter.sprite = StickyIndicator;
-                        rightMeter.sprite = StickyIndicator;
-                        leftMeterBase.sprite = StickyIndicator;
-                        rightMeterBase.sprite = StickyIndicator;
-                    }
-                    else
-                    {
-                        if (overrideRequest != null)
-                        {
-                            overrideRequest.Dispose();
-                        }
-                        //baseMeter.sprite = SwordIndicator;
-                        leftMeter.sprite = SwordIndicator;
-                        rightMeter.sprite = SwordIndicator;
-                        leftMeterBase.sprite = SwordIndicator;
-                        rightMeterBase.sprite = SwordIndicator;
-                    }
-                }
-            }
-            public void LateUpdate()
-            {
-                if (Util.HasEffectiveAuthority(characterBody.networkIdentity))
-                {
-                    float num = 0f;
-                    if (characterBody)
-                    {
-                        num = characterBody.spreadBloomAngle;
-                    }
-                    if (spritePositions != null)
-                        for (int i = 0; i < spritePositions.Length; i++)
-                        {
-                            CrosshairController.SpritePosition spritePosition = spritePositions[i];
-                            spritePosition.target.localPosition = Vector3.Lerp(spritePosition.zeroPosition, spritePosition.onePosition, num / 3f);
-                        }
-                }
-                
-            }
-            public void FixedUpdate()
-            {
-                if (canUseUtility && canUseUtilityTimer > 0f) canUseUtilityTimer -= Time.fixedDeltaTime;
-                if (canUseSecondary && canUseSecondaryTimer > 0f) canUseSecondaryTimer -= Time.fixedDeltaTime;
-                //if (!gmodPropsListObject && gmodOverlayController != null && gmodOverlayController.instancesList.Count > 0)
-                //{
-                //    GameObject gmodHud = gmodOverlayController.instancesList[0];
-                //    gmodPropsListObject = gmodHud.transform.Find("GmodPropsList").gameObject;
-                //    gmodPropsListObject.SetActive(false);
-                //    Transform grid = gmodPropsListObject.transform.GetChild(0);
-                //    foreach (var prop in GmodPropsCatalog.props)
-                //    {
-                //        GameObject newProp = Instantiate(GmodPropButton, grid);
-                //        GmodPropUIButton gmodPropUIButton = newProp.GetComponent<GmodPropUIButton>();
-                //        gmodPropUIButton.demoComponent = this;
-                //        gmodPropUIButton.gmodProp = prop;
-                //        Image image = newProp.GetComponent<Image>();
-                //        image.sprite = prop.icon;
-                //    }
-                //    currentPropImage = gmodHud.transform.Find("GmodPropIndicator/GmodPropImage").GetComponent<Image>();
-                //}
-                if (!hudObject && overlayController != null && overlayController.instancesList.Count > 0)
-                {
-                    List<CrosshairController.SpritePosition> spritePositions2 = new List<CrosshairController.SpritePosition>();
-                    hudObject = overlayController.instancesList[0];
-                    ChildLocator childLocator = hudObject.GetComponent<ChildLocator>();
-                    //baseMeter = childLocator.FindChild("CenterBase").GetComponent<Image>();
-                    leftMeter = childLocator.FindChild("LeftIndicator").GetComponent<Image>();
-                    rightMeter = childLocator.FindChild("RightIndicator").GetComponent<Image>();
-                    leftMeterBase = leftMeter.transform.parent.GetComponent<Image>();
-                    CrosshairController.SpritePosition spritePosition = new CrosshairController.SpritePosition
-                    {
-                        target = leftMeterBase.GetComponent<RectTransform>(),
-                        onePosition = new Vector3(16, 0, 0),
-                        zeroPosition = new Vector3(2, 0, 0),
-                    };
-                    spritePositions2.Add(spritePosition);
-                    rightMeterBase = rightMeter.transform.parent.GetComponent<Image>();
-                    spritePosition = new CrosshairController.SpritePosition
-                    {
-                        target = rightMeterBase.GetComponent<RectTransform>(),
-                        onePosition = new Vector3(-16, 0, 0),
-                        zeroPosition = new Vector3(-2, 0, 0),
-                    };
-                    spritePositions2.Add(spritePosition);
-                    //RectTransform grenadeCrosshair = childLocator.FindChild("GrenadeCrosshair").GetComponent<RectTransform>();
-                    //spritePosition = new CrosshairController.SpritePosition
-                    //{
-                    //    target = grenadeCrosshair,
-                    //    onePosition = new Vector3(0, -48 - 16, 0),
-                    //    zeroPosition = new Vector3(0, -48, 0)
-                    //};
-                    //spritePositions2.Add(spritePosition);
-                    spritePositions = spritePositions2.ToArray();
-                    //baseMeter = childLocator.FindChild("CenterCharge").GetComponent<Image>();
-                    extraPrimaryText = childLocator.FindChild("LeftText").GetComponent<TextMeshProUGUI>();
-                    extraSecondaryText = childLocator.FindChild("RightText").GetComponent<TextMeshProUGUI>();
-                    //grenadeCharge = childLocator.FindChild("GrenadeCrosshair").GetComponent<Image>();
-                    primaryStopwatch = childLocator.FindChild("LeftStick").GetComponent<Image>();
-                    secondaryStopwatch = childLocator.FindChild("RightStick").GetComponent<Image>();
-                    UpdateHudObject();
-                }
-                if (extraPrimaryText)
-                {
-                    if (trackStickies)
-                    {
-                        int stocks = trackStickies.stock;
-                        //for (int i = 0; i < primarystockCounter.childCount; i++)
-                        //{
-                        //    primarystockCounter.GetChild(i).gameObject.SetActive(stocks > 0 ? true : false);
-                        //    stocks--;
-                        //}
-                        if (stocks > 0)
-                        {
-                            //extraPrimaryText.gameObject.SetActive(true);
-                            extraPrimaryText.text = stocks.ToString();
-                        }
-                        else
-                        {
-                            //extraPrimaryText.gameObject.SetActive(false);
-                            extraPrimaryText.text = stocks.ToString();
-                        }
-                    }
-                }
-                if (inputBank)
-                {
-                }
-                if (skillLocator)
-                {
-                    if (extraSecondaryText)
-                    {
-                        int stocks = skillLocator.secondary.stock;
-                        //for (int i = 0; i < secondarystockCounter.childCount; i++)
-                        //{
-                        //    secondarystockCounter.GetChild(i).gameObject.SetActive(stocks > 0 ? true : false);
-                        //    stocks--;
-                        //}
-                        if (stocks > 0)
-                        {
-                            //extraSecondaryText.gameObject.SetActive(true);
-                            extraSecondaryText.text = stocks.ToString();
-                        }
-                        else
-                        {
-                            //extraSecondaryText.gameObject.SetActive(false);
-                            extraSecondaryText.text = stocks.ToString();
-                        }
-                    }
-                    if (primaryStopwatch && trackStickies)
-                    {
-                        if (trackStickies.stock >= trackStickies.maxStock)
-                        {
-                            primaryStopwatch.fillAmount = 1;
-                        }
-                        else
-                        {
-                            primaryStopwatch.fillAmount = 1 - ((trackStickies.finalRechargeInterval - trackStickies.rechargeStopwatch) / trackStickies.finalRechargeInterval);
-                        }
-
-                    }
-                    if (secondaryStopwatch)
-                    {
-                        if (skillLocator.secondary.stock >= skillLocator.secondary.maxStock)
-                        {
-                            secondaryStopwatch.fillAmount = 1;
-                        }
-                        else
-                        {
-                            secondaryStopwatch.fillAmount = 1 - ((skillLocator.secondary.finalRechargeInterval - skillLocator.secondary.rechargeStopwatch) / skillLocator.secondary.finalRechargeInterval);
-                        }
-
-                    }
-                }
-
-
-                if (stickyText)
-                {
-                    stickyText.text = stickyCount.ToString();
-                }
-                if (leftMeter && trackUtility && updateMeter)
-                {
-                    if (trackUtility.stock >= trackUtility.maxStock)
-                    {
-                        leftMeter.fillAmount = 1;
-                    }
-                    else
-                    {
-                        leftMeter.fillAmount = 1 - ((trackUtility.finalRechargeInterval - trackUtility.rechargeStopwatch) / trackUtility.finalRechargeInterval);
-                    }
-
-                }
-
-            }
-            public bool justReleased
-            {
-                get
-                {
-                    return !isUtilitydown && wasUtilitydown;
-                }
-            }
-            public bool justPressed
-            {
-                get
-                {
-                    return isUtilitydown && !wasUtilitydown;
-                }
-            }
-            public void Update()
-            {
-                if (inputBank && skillLocator)
-                {
-                    wasUtilitydown = isUtilitydown;
-                    if (inputBank.skill3.down)
-                    {
-                        isUtilitydown = true;
-                    }
-                    else
-                    {
-                        isUtilitydown = false;
-                    }
-                    if (justPressed)
-                    {
-                        bool switchOff = false;
-                        if (skillLocator.secondary.skillOverrides.Length > 0)
-                            foreach (var skillOverride in skillLocator.secondary.skillOverrides)
-                            {
-                                if (skillOverride.skillDef == SwapSkillDef && skillOverride.priority == GenericSkill.SkillOverridePriority.Contextual)
-                                {
-                                    switchOff = true;
-                                    break;
-                                }
-
-                            }
-                        if (!switchOff)
-                        {
-                            secondaryCooldown = skillLocator.secondary.rechargeStopwatch;
-                            secondaryStocks = skillLocator.secondary.stock;
-                            skillLocator.secondary.SetSkillOverride(this, SwapSkillDef, GenericSkill.SkillOverridePriority.Contextual);
-                            primaryReplaceCooldown = skillLocator.special.rechargeStopwatch;
-                            primaryReplaceStocks = skillLocator.special.stock;
-                            skillLocator.special.SetSkillOverride(this, SwapSkillDef, GenericSkill.SkillOverridePriority.Contextual);
-                        }
-
-                    }
-                    if (justReleased)
-                    {
-                        bool switchOff = false;
-                        if (skillLocator.secondary.skillOverrides.Length > 0)
-                            foreach (var skillOverride in skillLocator.secondary.skillOverrides)
-                            {
-                                if (skillOverride.skillDef == SwapSkillDef && skillOverride.priority == GenericSkill.SkillOverridePriority.Contextual)
-                                {
-                                    switchOff = true;
-                                    break;
-                                }
-
-                            }
-                        if (switchOff)
-                        {
-                            skillLocator.secondary.UnsetSkillOverride(this, SwapSkillDef, GenericSkill.SkillOverridePriority.Contextual);
-                            skillLocator.secondary.stock = secondaryStocks;
-                            skillLocator.secondary.rechargeStopwatch = secondaryCooldown;
-                            skillLocator.special.UnsetSkillOverride(this, SwapSkillDef, GenericSkill.SkillOverridePriority.Contextual);
-                            skillLocator.special.stock = primaryReplaceStocks;
-                            skillLocator.special.rechargeStopwatch = primaryReplaceCooldown;
-                        }
-                        if (canUseUtilityTimer <= 0)
-                        {
-                            if (bodyStateMachine && bodyStateMachine.state.GetType() == bodyStateMachine.mainStateType.stateType)
-                                skillLocator.utility.ExecuteIfReady();
-                        }
-                        canUseUtility = true;
-                        useUtility = false;
-                    }
-
-                }
-            }
-        }
+        
+        
         public class GmodPropDef
         {
             public Sprite icon;
@@ -3602,60 +3244,7 @@ namespace Demolisher
 
             }
         }
-        public class DemoVoicelinesComponent : MonoBehaviour
-        {
-            public int kills = 0;
-            public NetworkBehaviour networkBehaviour;
-            public DemoVoiceline currentVoiceline;
-            public void PlayAudio(DemoVoiceline demoVoiceline)
-            {
-                StopCurrentAudio();
-                currentVoiceline = demoVoiceline;
-                new PlaySoundNetMessage(networkBehaviour.netId, currentVoiceline.playString).Send(NetworkDestination.Clients);
-            }
-            public void PlayGenericKillAudio()
-            {
-                DemoVoiceline demoVoiceline = demoVoiceLines[DemoVoicelineType.Kill][Random.Range(0, demoVoiceLines[DemoVoicelineType.Kill].Count)];
-                PlayAudio(demoVoiceline);
-            }
-            public void PlayTrapKillAudio()
-            {
-                DemoVoiceline demoVoiceline = demoVoiceLines[DemoVoicelineType.TrapKill][Random.Range(0, demoVoiceLines[DemoVoicelineType.TrapKill].Count)];
-                PlayAudio(demoVoiceline);
-            }
-            public void PlayDeathAudio()
-            {
-                DemoVoiceline demoVoiceline = demoVoiceLines[DemoVoicelineType.Death][Random.Range(0, demoVoiceLines[DemoVoicelineType.Death].Count)];
-                PlayAudio(demoVoiceline);
-            }
-            public void StopCurrentAudio()
-            {
-                if (currentVoiceline != null)
-                {
-                    new PlaySoundNetMessage(networkBehaviour.netId, currentVoiceline.stopString).Send(NetworkDestination.Clients);
-                }
-            }
-            public void RegisterKill(CharacterBody characterBody, DamageReport damageReport)
-            {
-                kills += characterBody && characterBody.isChampion ? 500 : 1;
-                if (Random.Range(0, 100 - VoicelineOnKillBaseChance.Value - (kills * VoicelineOnKillChanceAddition.Value)) < 10)
-                {
-                    if (damageReport.damageInfo.inflictor != null && damageReport.damageInfo.inflictor.GetComponent<StickyComponent>())
-                    {
-                        Invoke("PlayTrapKillAudio", Random.Range(0.2f, 1f));
-                    }
-                    else
-                    {
-                        Invoke("PlayGenericKillAudio", Random.Range(0.2f, 1f));
-                    }
-                    
-                    kills = 0;
-                }
-            }
-            public void Update()
-            {
-            }
-        }
+       
         public abstract class StickyComponent : MonoBehaviour, IProjectileImpactBehavior, ILifeBehavior
         {
             private float stopwatch = 0f;
@@ -3778,6 +3367,8 @@ namespace Demolisher
                 rangeIndicator.transform.position = transform.position;
                 rangeIndicator.transform.localScale = OneVector(projectileImpactExplosion.blastRadius);
                 actualFullArmTime /= demoComponent ? demoComponent.characterBody.attackSpeed : 1f;
+                actualArmTime /= demoComponent ? demoComponent.characterBody.attackSpeed : 1f;
+                actualDetonationTime /= demoComponent ? demoComponent.characterBody.attackSpeed : 1f;
             }
             public virtual void OnStickyArmed()
             {
@@ -4572,12 +4163,13 @@ namespace Demolisher
 
             //QuickiebombLauncherSkillDef = GrenadeLauncherInit(typeof(QuickiebombLauncher), "DEMOMAN_QUICKIEBOMBLAUNCHER_NAME", "DEMOMAN_QUICKIEBOMBLAUNCHER_DESC", true, 4, 1, 1);
             objectsActualNames.Add("DemoMineLayer", MineLayerName);
-            MineLayerSkillDef = GrenadeLauncherInit(typeof(MineLayer), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoMineSkillIcon.png"), "DemoMineLayer", "DEMOMAN_MINELAYER_NAME", "DEMOMAN_MINELAYER_DESC", new string[] { "DEMOMAN_MINELAYER_KEY" }, true, 8, 1, 1);
+            //TODO: Fix Mine Layer projectiles
+            //MineLayerSkillDef = GrenadeLauncherInit(typeof(MineLayer), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoMineSkillIcon.png"), "DemoMineLayer", "DEMOMAN_MINELAYER_NAME", "DEMOMAN_MINELAYER_DESC", new string[] { "DEMOMAN_MINELAYER_KEY" }, true, 8, 1, 1);
             //ToolgunSkillDef = GrenadeLauncherInit(typeof(ToolGun), null, "DemoToolgun", "DEMOMAN_TOOLGUN_NAME", "DEMOMAN_TOOLGUN_DESC", new string[] { "DEMOMAN_TOOLGUN_KEY" }, false, 1, 0f, 1, 1, 0);
             LanguageAPI.Add("DEMOMAN_MINELAYER_NAME", "Mine Layer");
             GrenadeLauncher mineDesc = new MineLayer();
             LanguageAPI.Add("DEMOMAN_MINELAYER_DESC", "Fires a sticky trap with remote and proximity detonation that sticks on impact for " + LanguagePrefix((mineDesc.damage * 100).ToString() + "%", LanguagePrefixEnum.Damage) + " damage.");
-            GenerateGrenadeKeywordToken(MineLayerName, "DEMOMAN_MINELAYER_KEY", MineProjectile, MineLayerSkillDef, mineDesc, "Mines detonate automatically on enemy contact.");
+            //GenerateGrenadeKeywordToken(MineLayerName, "DEMOMAN_MINELAYER_KEY", MineProjectile, MineLayerSkillDef, mineDesc, "Mines detonate automatically on enemy contact.");
             objectsActualNames.Add("DemoAntigravityBombLauncher", AntigravLauncherName);
             AntigravLauncherSkillDef = GrenadeLauncherInit(typeof(AntigravLauncher), ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoAntigravBombSkillIcon.png"), "DemoAntigravityBombLauncher", "DEMOMAN_QUICKIEBOMBLAUNCHER_NAME", "DEMOMAN_QUICKIEBOMBLAUNCHER_DESC", new string[] { "DEMOMAN_QUICKIEBOMBLAUNCHER_KEY" }, true, 4, 1.1f, 1);
             LanguageAPI.Add("DEMOMAN_PILLLAUNCHER_NAME", "Grenade Launcher");
@@ -4662,7 +4254,7 @@ namespace Demolisher
                 "Teleport to desired position and hit all enemies within the sword range for double of the sword damage. Can be fired at any moment\n\n" +
                 LanguagePrefix("Ranged style", LanguagePrefixEnum.Keyword) +
                 "\n\n" +
-                "Charge to shoot a powerfull beam that explodes on contact, dealing 2000% damage in the 16 meters radius. Can be fired only when fully charged");
+                "Charge to shoot a powerfull beam that explodes on contact, dealing 8000% damage in the 16 meters radius. Can be fired only when fully charged");
             //LanguageAPI.Add("DEMOMAN_SPECIALTWOALT_NAME", "Trap Storm");
             //LanguageAPI.Add("DEMOMAN_SPECIALTWOALT_DESC", $"Stick.");
             ManthreadsSkillDef = PassiveInit(ThunderkitAssets.LoadAsset<Sprite>("Assets/Demoman/Skills/DemoMannthreadsSkillIcon.png"), "DemoStompPassive", "DEMOMAN_STOMPSKILL_NAME", "DEMOMAN_STOMPSKILL_DESC");
@@ -4698,6 +4290,7 @@ namespace Demolisher
             GameObject commandoBodyPrefab = Main.DemoBody;
 
             SkillDef mySkillDef = ScriptableObject.CreateInstance<T>();
+            skillsBonusStocksMultiplier.Add(mySkillDef, maxStocks);
             mySkillDef.activationState = new SerializableEntityStateType(state);
             mySkillDef.activationStateMachineName = activationState;
             mySkillDef.baseMaxStock = maxStocks;
@@ -4743,7 +4336,7 @@ namespace Demolisher
         public static SkillDef GrenadeLauncherInit(Type state, Sprite sprite, string name, string nameToken, string descToken, string[] keyWordTokens, bool isSticky = false, int baseStocks = 4, float rechargeInterval = 4f, int requiredStock = 1, int rechargeStock = 1, int stockToConsume = 1)
         {
             SkillDef skillDef = GrenadeLauncherInit<SkillDef>(state, sprite, name, nameToken, descToken, keyWordTokens, isSticky, baseStocks, rechargeInterval, requiredStock, rechargeStock, stockToConsume);
-            skillsBonusStocksMultiplier.Add(skillDef, baseStocks);
+            
             return skillDef;
         }
         public static T GrenadeLauncherInit<T>(Type state, Sprite sprite, string name, string nameToken, string descToken, string[] keyWordTokens, bool isSticky = false, int baseStocks = 4, float rechargeInterval = 4f, int requiredStock = 1, int rechargeStock = 1, int stockToConsume = 1) where T : SkillDef
@@ -5027,6 +4620,7 @@ namespace Demolisher
             states.Add(typeof(UltraInstinctRedirector));
             states.Add(typeof(UltraInstinctSticky));
             states.Add(typeof(UltraInstinctSword));
+            states.Add(typeof(UltraInstinctFinal));
             states.Add(typeof(Slam));
             states.Add(typeof(Slamming));
             states.Add(typeof(ShieldChargeAntigravity));
@@ -5163,8 +4757,8 @@ namespace Demolisher
         {
             StickyLauncherObject = new DemoStickyClass(StickyProjectile, new StickyLauncher());
             bombProjectiles.Add(StickyLauncherSkillDef, StickyLauncherObject);
-            MineLayerObject = new DemoStickyClass(MineProjectile, new MineLayer());
-            bombProjectiles.Add(MineLayerSkillDef, MineLayerObject);
+            //MineLayerObject = new DemoStickyClass(MineProjectile, new MineLayer());
+            //bombProjectiles.Add(MineLayerSkillDef, MineLayerObject);
             AntigravLauncherObject = new DemoStickyClass(AntigravProjectile, new AntigravLauncher());
             bombProjectiles.Add(AntigravLauncherSkillDef, AntigravLauncherObject);
             JumperLauncherObject = new DemoStickyClass(JumperProjectile, new JumperLauncher());
@@ -5304,7 +4898,7 @@ namespace Demolisher
                     allowTrajectoryAimAssist = true,
                     hitMask = bulletAttack.hitMask,
                     procCoefficient = bulletAttack.procCoefficient,
-                    stopperMask = bulletAttack.stopperMask,
+                    stopperMask = LayerIndex.world.mask,
                     damageType = new DamageTypeCombo(DamageType.Generic, DamageTypeExtended.Generic, DamageSource.Primary),
                     force = bulletAttack.force,
                     falloffModel = BulletAttack.FalloffModel.None,
@@ -5393,7 +4987,7 @@ namespace Demolisher
                 chargeVector.y = 0f;
                 chargeVector = chargeVector.normalized;
                 base.characterBody.isSprinting = true;
-                demoComponent = characterBody.GetComponent<DemoComponent>();
+                demoComponent = characterBody is DemoCharacterBody ?(characterBody as DemoCharacterBody).demoComponent : null;
                 characterBody.armor += armor;
                 if (NetworkServer.active)
                 {
@@ -5660,7 +5254,7 @@ namespace Demolisher
             public override void OnEnter()
             {
                 base.OnEnter();
-                demoComponent = gameObject.GetComponent<DemoComponent>();
+                demoComponent = characterBody is DemoCharacterBody ? (characterBody as DemoCharacterBody).demoComponent : null;
                 if (canBeCharged && isAuthority) Util.PlaySound(DemoCannonChargeSound.playSoundString, gameObject);
                 if (base.isAuthority)
                 {
@@ -6059,11 +5653,11 @@ namespace Demolisher
 
         public class Detonate : BaseState
         {
-            private Main.DemoComponent demoComponent;
+            private DemoComponent demoComponent;
             public override void OnEnter()
             {
                 base.OnEnter();
-                demoComponent = gameObject.GetComponent<Main.DemoComponent>();
+                demoComponent = characterBody is DemoCharacterBody ? (characterBody as DemoCharacterBody).demoComponent : null;
                 if (demoComponent != null)
                 {
                     DetonateAllStickies();
@@ -6476,7 +6070,7 @@ namespace Demolisher
                 spinner.transform.position = inputBank.aimOrigin;
                 spinner.transform.localScale = new Vector3(2f, 1f, 2f);
                 rotationVector = characterDirection.forward;
-                demoComponent = GetComponent<DemoComponent>();
+                demoComponent = characterBody is DemoCharacterBody ? (characterBody as DemoCharacterBody).demoComponent : null;
                 if (demoComponent)
                 {
                     demoComponent.DetonateNoLimitStickies();
@@ -6547,7 +6141,7 @@ namespace Demolisher
                 base.OnEnter();
                 if (isAuthority)
                     Util.PlaySound(DemoCannonChargeSound.playSoundString, gameObject);
-                demoComponent = GetComponent<DemoComponent>();
+                demoComponent = characterBody is DemoCharacterBody ? (characterBody as DemoCharacterBody).demoComponent : null;
                 chargeImage = demoComponent ? demoComponent.rightMeter : null;
             }
             public override void FixedUpdate()
@@ -6877,7 +6471,7 @@ namespace Demolisher
                             };
                             BlastAttack.Result result = nukeExplosion.Fire();
                             Vector3 direction = ray.direction;
-                            new InstantiateObjectNetMessage(objectToId[NukeEffect], nukeExplosion.position, new Vector3(0f, direction.y, 0f), OneVector(nukeExplosion.radius / 4f), 6f).Send(NetworkDestination.Clients);
+                            new InstantiateObjectNetMessage(objectToId[NukeEffect], nukeExplosion.position, raycastHit.normal, OneVector(nukeExplosion.radius / 4f), 6f).Send(NetworkDestination.Clients);
                             //new InstantiateObjectNetMessage(objectToId[HudExplosion], Vector3.zero, Vector3.zero, Vector3.one, 5f).Send(NetworkDestination.Clients);
                         }
                         
@@ -7016,7 +6610,7 @@ namespace Demolisher
             public float timeScale = 1f;
             public int leapAmount = 6;
             public float time = 15f;
-            public float holdTime = 0f;
+            public float holdTime = 5f;
             public float distance = 24f;
             public bool attack = true;
             public DemoComponent demoComponent;
@@ -7032,6 +6626,7 @@ namespace Demolisher
                 base.OnEnter();
                 int stocks = activatorSkillSlot.stock;
                 activatorSkillSlot.stock = stocks * 4;
+                time = 5f * stocks;
                 if (isAuthority)
                 {
                     timeScale = 10 * attackSpeedStat;
@@ -7088,14 +6683,26 @@ namespace Demolisher
                     bool onlyAllowMovement;
                     if (PlayerCharacterMasterController.CanSendBodyInput(playerCharacterMasterController.networkUser, out localUser, out player, out cameraRigController, out onlyAllowMovement))
                     {
-                        if (player.GetButtonDown(7) && attack) { attack = false; new LeapNetMessage(characterBody.netId).Send(NetworkDestination.Clients); };
+                        if (player.GetButtonDown(7) && attack)LeapAuthority();
                         if (!attack && player.GetButtonUp(7)) attack = true;
                         if (player.GetButtonDown(10) && isAuthority) endState = true;
                     }
                 }
 
             }
-            public void Leap()
+            public void LeapGlobal(Vector3 finalPosition)
+            {
+                if (characterDirection)
+                {
+                    Vector3 direction = finalPosition - transform.position;
+                    characterDirection.forward = direction.normalized;
+                    characterDirection.targetVector = direction.normalized;
+                }
+                SimpleTracer(transform.position, finalPosition);
+                Util.PlaySound(EntityStates.ImpMonster.BlinkState.beginSoundString, base.gameObject);
+            }
+            
+            public void LeapAuthority()
             {
                 Ray ray = GetAimRay();
                 activatorSkillSlot.stock--;
@@ -7149,15 +6756,10 @@ namespace Demolisher
                     };
                     bulletAttack2.Fire();
                 }
-                if (characterDirection)
-                {
-                    Vector3 direction = finalPosition - transform.position;
-                    characterDirection.forward = direction.normalized;
-                    characterDirection.targetVector = direction.normalized;
-                }
-                SimpleTracer(transform.position, finalPosition);
-                Util.PlaySound(EntityStates.ImpMonster.BlinkState.beginSoundString, base.gameObject);
+                attack = false;
+                new LeapNetMessage(characterBody.netId, finalPosition).Send(NetworkDestination.Clients);
                 TeleportHelper.TeleportBody(characterBody, finalPosition, false);;
+                holdTime = 5f;
                 if (activatorSkillSlot.stock <= 0 && isAuthority) endState = true;
             }
             public override void OnExit()
@@ -7191,18 +6793,18 @@ namespace Demolisher
                 base.FixedUpdate();
                 if (!characterBody.isPlayerControlled && !playerCharacterMasterController)
                 {
-                    if (inputBank)
+                    if (isAuthority && inputBank)
                     {
-                        if (attack && inputBank.skill1.justPressed) Leap();
+                        if (attack && inputBank.skill1.justPressed) LeapAuthority();
                         if (!attack && inputBank.skill1.justReleased) attack = true;
                         if (inputBank.skill4.justPressed && isAuthority) outer.SetNextStateToMain();
                     }
 
                 }
                 
-                
+                holdTime -= Time.fixedUnscaledDeltaTime;
                 time -= Time.fixedUnscaledDeltaTime;
-                if (time <= 0 && isAuthority) outer.SetNextStateToMain();
+                if ((time <= 0)||(holdTime <= 0) && isAuthority) outer.SetNextStateToMain();
                 if (endState) outer.SetNextStateToMain();
             }
         }
@@ -7335,7 +6937,7 @@ namespace Demolisher
                 DemoStickyClass demoSticky = bombProjectiles.ContainsKey(skillLocator.primary.baseSkill) ? bombProjectiles[skillLocator.primary.baseSkill] : null;
                 projectile = demoSticky != null ? demoSticky.stickyObject : LegacyResourcesAPI.Load<GameObject>("Prefabs/Projectiles/FireMeatBall");
                 damage = demoSticky != null ? demoSticky.stickyState.damage : 4;
-                demoComponent = GetComponent<DemoComponent>();
+                demoComponent = characterBody is DemoCharacterBody ? (characterBody as DemoCharacterBody).demoComponent : null;
                 if (demoComponent)
                 {
                     demoComponent.DetonateNoLimitStickies();
@@ -7569,7 +7171,7 @@ namespace Demolisher
             public override void OnEnter()
             {
                 base.OnEnter();
-                DemoComponent demoComponent = GetComponent<DemoComponent>();
+                DemoComponent demoComponent = characterBody is DemoCharacterBody ? (characterBody as DemoCharacterBody).demoComponent : null;
                 EntityStateMachine bodyStateMachine = GetComponent<EntityStateMachine>();
                 if (isAuthority)
                 {
@@ -7656,7 +7258,7 @@ namespace Demolisher
                 DemoStickyClass demoSticky = bombProjectiles.ContainsKey(skillLocator.primary.baseSkill) ? bombProjectiles[skillLocator.primary.baseSkill] : null;
                 projectile = demoSticky != null ? demoSticky.stickyObject : LegacyResourcesAPI.Load<GameObject>("Prefabs/Projectiles/FireMeatBall");
                 damage = demoSticky != null ? demoSticky.stickyState.damage : 4;
-                demoComponent = GetComponent<DemoComponent>();
+                demoComponent = characterBody is DemoCharacterBody ? (characterBody as DemoCharacterBody).demoComponent : null;
                 if (demoComponent)
                 {
                     demoComponent.noLimitStickies++;
@@ -7897,7 +7499,7 @@ namespace Demolisher
             public override void OnEnter()
             {
                 base.OnEnter();
-                DemoComponent demoComponent = GetComponent<DemoComponent>();
+                DemoComponent demoComponent = characterBody is DemoCharacterBody ? (characterBody as DemoCharacterBody).demoComponent : null;
                 if (skillLocator && demoComponent != null)
                 {
                     GenericSkill genericSkill2 = skillLocator.primary;
@@ -7994,6 +7596,10 @@ namespace Demolisher
 
 
     }
+    public class Components
+    {
+        
+    }
     public class ContentPacks : IContentPackProvider
     {
         internal ContentPack contentPack = new ContentPack();
@@ -8008,6 +7614,7 @@ namespace Demolisher
         public static List<Type> states = new List<Type>();
         public static List<NetworkSoundEventDef> sounds = new List<NetworkSoundEventDef>();
         public static List<UnlockableDef> unlockableDefs = new List<UnlockableDef>();
+        public static List<GameObject> masters = new List<GameObject>();
         public IEnumerator FinalizeAsync(FinalizeAsyncArgs args)
         {
             args.ReportProgress(1f);
@@ -8034,6 +7641,7 @@ namespace Demolisher
             contentPack.networkSoundEventDefs.Add(sounds.ToArray());
             contentPack.networkedObjectPrefabs.Add(networkPrefabs.ToArray());
             contentPack.unlockableDefs.Add(unlockableDefs.ToArray());
+            contentPack.masterPrefabs.Add(masters.ToArray());
             yield break;
         }
     }
@@ -8104,7 +7712,541 @@ namespace Demolisher
     }
 
 }
+namespace DemolisherComponents
+{
+    public class DemoVoicelinesComponent : MonoBehaviour
+    {
+        public int kills = 0;
+        public NetworkBehaviour networkBehaviour;
+        public DemoVoiceline currentVoiceline;
+        private bool isAudioInvoking = false;
+        public void PlayAudio(DemoVoiceline demoVoiceline)
+        {
+            StopCurrentAudio();
+            currentVoiceline = demoVoiceline;
+            //Util.PlaySound(currentVoiceline.playString, gameObject);
+            new PlaySoundNetMessage(networkBehaviour.netId, currentVoiceline.playString, true).Send(NetworkDestination.Clients);
+            isAudioInvoking = false;
+        }
+        public void PlayGenericKillAudio()
+        {
+            DemoVoiceline demoVoiceline = demoVoiceLines[DemoVoicelineType.Kill][Random.Range(0, demoVoiceLines[DemoVoicelineType.Kill].Count)];
+            PlayAudio(demoVoiceline);
+        }
+        public void PlayTrapKillAudio()
+        {
+            DemoVoiceline demoVoiceline = demoVoiceLines[DemoVoicelineType.TrapKill][Random.Range(0, demoVoiceLines[DemoVoicelineType.TrapKill].Count)];
+            PlayAudio(demoVoiceline);
+        }
+        public void PlayDeathAudio()
+        {
+            DemoVoiceline demoVoiceline = demoVoiceLines[DemoVoicelineType.Death][Random.Range(0, demoVoiceLines[DemoVoicelineType.Death].Count)];
+            PlayAudio(demoVoiceline);
+        }
+        public void PlayReleaseAudio()
+        {
+            DemoVoiceline demoVoiceline = demoVoiceLines[DemoVoicelineType.Landing][Random.Range(0, demoVoiceLines[DemoVoicelineType.Landing].Count)];
+            PlayAudio(demoVoiceline);
+        }
+        public void StopCurrentAudio()
+        {
+            if (currentVoiceline != null)
+            {
+                //Util.PlaySound(currentVoiceline.stopString, gameObject);
+                new PlaySoundNetMessage(networkBehaviour.netId, currentVoiceline.stopString, true).Send(NetworkDestination.Clients);
+            }
+        }
+        public void RegisterKill(CharacterBody characterBody, DamageReport damageReport)
+        {
+            kills += characterBody && characterBody.isChampion ? 500 : 1;
+            if (!isAudioInvoking && Random.Range(0, 100 - VoicelineOnKillBaseChance.Value - (kills * VoicelineOnKillChanceAddition.Value)) < 10)
+            {
+                if (damageReport.damageInfo.inflictor != null && damageReport.damageInfo.inflictor.GetComponent<StickyComponent>())
+                {
+                    Invoke("PlayTrapKillAudio", Random.Range(0.2f, 1f));
+                }
+                else
+                {
+                    Invoke("PlayGenericKillAudio", Random.Range(0.2f, 1f));
+                }
 
+                kills = 0;
+                isAudioInvoking = true;
+            }
+        }
+        public void Update()
+        {
+        }
+    }
+    public class DemoCharacterBody : CharacterBody
+    {
+        public DemoComponent demoComponent;
+        public DemoVoicelinesComponent demoVoicelinesComponent;
+        //public void Awake()
+        //{
+        //    demoComponent = gameObject.GetComponent<DemoComponent>();
+        //    demoVoicelinesComponent = gameObject.GetComponent<DemoVoicelinesComponent>();
+        //}
+    }
+    public class DemoComponent : MonoBehaviour
+    {
+        public Dictionary<string, List<StickyComponent>> stickies = new Dictionary<string, List<StickyComponent>>();
+        public int noLimitStickies = 0;
+        public int maxAdditionalStickies = 0;
+        public float additionalArmTime = 0f;
+        public InputBankTest inputBank;
+        public SkillLocator skillLocator;
+        public int secondaryStocks = 0;
+        public float secondaryCooldown = 0f;
+        public int primaryStocks = 0;
+        public float primaryCooldown = 0f;
+        public int primaryReplaceStocks = 0;
+        public float primaryReplaceCooldown = 0f;
+        public GenericSkill primaryReplace;
+        public GenericSkill utilityReplace;
+        public GenericSkill secondaryReplace;
+        public GenericSkill specialReplace;
+        public GameObject chargeMeter;
+        public OverlayController overlayController;
+        public bool updateMeter = true;
+        public GameObject hudObject;
+        public GameObject altCrosshair;
+        public ChildLocator childLocator;
+        public CharacterModel characterModel;
+        public CharacterBody characterBody;
+        private CrosshairUtils.OverrideRequest overrideRequest;
+        public Transform primarystockCounter;
+        public Image primaryStopwatch;
+        public Transform secondarystockCounter;
+        public Image secondaryStopwatch;
+        public Image leftMeter;
+        public Image rightMeter;
+        public Image leftMeterBase;
+        public Image rightMeterBase;
+        //public Image baseMeter;
+        public TextMeshProUGUI stickyText;
+        public TextMeshProUGUI extraPrimaryText;
+        public TextMeshProUGUI extraSecondaryText;
+        private GenericSkill trackStickies;
+        private GenericSkill trackSword;
+        private GenericSkill trackUtility;
+        private CameraTargetParams cameraTargetParams;
+        public bool canUseUtility = true;
+        public float canUseUtilityTimer = 0f;
+        public bool canUseSecondary = true;
+        public float canUseSecondaryTimer = 0f;
+        public bool useUtility;
+        public EntityStateMachine bodyStateMachine;
+        public GameObject swordObject;
+        public GameObject shieldObject;
+        public CrosshairController.SpritePosition[] spritePositions;
+        private bool isUtilitydown = false;
+        private bool wasUtilitydown = false;
+        public GmodPropDef currentProp;
+        public Image currentPropImage;
+        public OverlayController gmodOverlayController;
+        public GameObject gmodPropsListObject;
+        public int index = 0;
+        public int stickyCount
+        {
+            get
+            {
+                int count = 0;
+                foreach (var stickyClass in stickies)
+                {
+                    count += stickyClass.Value.Count;
+                }
+                return count;
+            }
+        }
+        public bool isSwapped
+        {
+            get
+            {
+                if (skillLocator && stickySkills.Contains(skillLocator.primary.baseSkill))
+                {
+                    return true;
+                }
+                else
+                {
+                    return false;
+                }
+            }
+        }
+        public void Awake()
+        {
+            //inputBank = gameObject.GetComponent<InputBankTest>();
+            //skillLocator = gameObject.GetComponent<SkillLocator>();
+            primaryReplace = skillLocator.FindSkillByFamilyName("DemoStickies");
+            primaryReplace.RecalculateValues();
+            trackStickies = primaryReplace;
+            SkillDef detonateSkill = DetonateSkillDef;
+            if (customDetonationSkills.ContainsKey(primaryReplace.baseSkill)) detonateSkill = customDetonationSkills[primaryReplace.baseSkill];
+            utilityReplace = skillLocator.FindSkillByFamilyName("DemoDetonate");
+            utilityReplace.RecalculateValues();
+            trackUtility = skillLocator.utility;
+
+            //childLocator = gameObject.GetComponent<ModelLocator>().modelTransform.GetComponent<ChildLocator>();
+            //characterBody = GetComponent<CharacterBody>();
+            //characterModel = characterBody.modelLocator.modelTransform.GetComponent<CharacterModel>();
+
+            if (stickies.ContainsKey("All"))
+            {
+
+            }
+            else
+            {
+                stickies.Add("All", new List<StickyComponent>());
+            }
+            cameraTargetParams = GetComponent<CameraTargetParams>();
+            //EntityStateMachine[] entityStateMachines = GetComponents<EntityStateMachine>();
+            //if (entityStateMachines != null)
+            //{
+            //    foreach (EntityStateMachine entityStateMachine in entityStateMachines)
+            //    {
+            //        if (entityStateMachine != null && entityStateMachine.customName == "Body")
+            //        {
+            //            bodyStateMachine = entityStateMachine;
+            //        }
+            //    }
+            //}
+        }
+        public void OnEnable()
+        {
+
+            GetComponent<ModelLocator>().modelTransform.GetComponent<DynamicBone>().m_Weight = 0.07f;
+            //CrosshairController controller = chargeMeter.GetComponent<CrosshairController>();
+            //controller.hudElement.targetBodyObject = gameObject;
+            //controller.hudElement.targetCharacterBody = characterBody;
+            OverlayCreationParams overlayCreationParams = new OverlayCreationParams
+            {
+                prefab = chargeMeter,
+                childLocatorEntry = "CrosshairExtras"
+            };
+            this.overlayController = HudOverlayManager.AddOverlay(base.gameObject, overlayCreationParams);
+            this.overlayController.onInstanceAdded += OnOverlayInstanceAdded;
+            this.overlayController.onInstanceRemove += OnOverlayInstanceRemoved;
+            return;
+            OverlayCreationParams overlayCreationParams2 = new OverlayCreationParams
+            {
+                prefab = GmodHud,
+                childLocatorEntry = "CrosshairExtras"
+            };
+            this.gmodOverlayController = HudOverlayManager.AddOverlay(base.gameObject, overlayCreationParams2);
+            this.gmodOverlayController.onInstanceAdded += OnOverlayInstanceAdded;
+            this.gmodOverlayController.onInstanceRemove += OnOverlayInstanceRemoved;
+            //meterImage = overlayController.instancesList[0].GetComponent<Image>();
+        }
+
+        private void OnOverlayInstanceRemoved(OverlayController controller, GameObject @object)
+        {
+            //meterImage = controller.instancesList[0].GetComponent<Image>();
+        }
+        public void DetonateNoLimitStickies()
+        {
+            if (stickies.ContainsKey("All"))
+            {
+                while (stickies["All"].Count > 0)
+                {
+                    for (int i = 0; i < stickies["All"].Count; i++)
+                    {
+                        stickies["All"][i].DetonateSticky(0);
+                    }
+                }
+            }
+        }
+        private void OnOverlayInstanceAdded(OverlayController controller, GameObject @object)
+        {
+        }
+
+        public void UpdateHudObject()
+        {
+            if (hudObject)
+            {
+                if (isSwapped)
+                {
+                    if (altCrosshair)
+                    {
+                        overrideRequest = CrosshairUtils.RequestOverrideForBody(characterBody, altCrosshair, CrosshairUtils.OverridePriority.Skill);
+                    }
+
+                    //baseMeter.sprite = StickyIndicator;
+                    leftMeter.sprite = StickyIndicator;
+                    rightMeter.sprite = StickyIndicator;
+                    leftMeterBase.sprite = StickyIndicator;
+                    rightMeterBase.sprite = StickyIndicator;
+                }
+                else
+                {
+                    if (overrideRequest != null)
+                    {
+                        overrideRequest.Dispose();
+                    }
+                    //baseMeter.sprite = SwordIndicator;
+                    leftMeter.sprite = SwordIndicator;
+                    rightMeter.sprite = SwordIndicator;
+                    leftMeterBase.sprite = SwordIndicator;
+                    rightMeterBase.sprite = SwordIndicator;
+                }
+            }
+        }
+        public void LateUpdate()
+        {
+            if (Util.HasEffectiveAuthority(characterBody.networkIdentity))
+            {
+                float num = 0f;
+                if (characterBody)
+                {
+                    num = characterBody.spreadBloomAngle;
+                }
+                if (spritePositions != null)
+                    for (int i = 0; i < spritePositions.Length; i++)
+                    {
+                        CrosshairController.SpritePosition spritePosition = spritePositions[i];
+                        spritePosition.target.localPosition = Vector3.Lerp(spritePosition.zeroPosition, spritePosition.onePosition, num / 3f);
+                    }
+            }
+
+        }
+        public void FixedUpdate()
+        {
+            if (canUseUtility && canUseUtilityTimer > 0f) canUseUtilityTimer -= Time.fixedDeltaTime;
+            if (canUseSecondary && canUseSecondaryTimer > 0f) canUseSecondaryTimer -= Time.fixedDeltaTime;
+            //if (!gmodPropsListObject && gmodOverlayController != null && gmodOverlayController.instancesList.Count > 0)
+            //{
+            //    GameObject gmodHud = gmodOverlayController.instancesList[0];
+            //    gmodPropsListObject = gmodHud.transform.Find("GmodPropsList").gameObject;
+            //    gmodPropsListObject.SetActive(false);
+            //    Transform grid = gmodPropsListObject.transform.GetChild(0);
+            //    foreach (var prop in GmodPropsCatalog.props)
+            //    {
+            //        GameObject newProp = Instantiate(GmodPropButton, grid);
+            //        GmodPropUIButton gmodPropUIButton = newProp.GetComponent<GmodPropUIButton>();
+            //        gmodPropUIButton.demoComponent = this;
+            //        gmodPropUIButton.gmodProp = prop;
+            //        Image image = newProp.GetComponent<Image>();
+            //        image.sprite = prop.icon;
+            //    }
+            //    currentPropImage = gmodHud.transform.Find("GmodPropIndicator/GmodPropImage").GetComponent<Image>();
+            //}
+            if (!hudObject && overlayController != null && overlayController.instancesList.Count > 0)
+            {
+                List<CrosshairController.SpritePosition> spritePositions2 = new List<CrosshairController.SpritePosition>();
+                hudObject = overlayController.instancesList[0];
+                ChildLocator childLocator = hudObject.GetComponent<ChildLocator>();
+                //baseMeter = childLocator.FindChild("CenterBase").GetComponent<Image>();
+                leftMeter = childLocator.FindChild("LeftIndicator").GetComponent<Image>();
+                rightMeter = childLocator.FindChild("RightIndicator").GetComponent<Image>();
+                leftMeterBase = leftMeter.transform.parent.GetComponent<Image>();
+                CrosshairController.SpritePosition spritePosition = new CrosshairController.SpritePosition
+                {
+                    target = leftMeterBase.GetComponent<RectTransform>(),
+                    onePosition = new Vector3(16, 0, 0),
+                    zeroPosition = new Vector3(2, 0, 0),
+                };
+                spritePositions2.Add(spritePosition);
+                rightMeterBase = rightMeter.transform.parent.GetComponent<Image>();
+                spritePosition = new CrosshairController.SpritePosition
+                {
+                    target = rightMeterBase.GetComponent<RectTransform>(),
+                    onePosition = new Vector3(-16, 0, 0),
+                    zeroPosition = new Vector3(-2, 0, 0),
+                };
+                spritePositions2.Add(spritePosition);
+                //RectTransform grenadeCrosshair = childLocator.FindChild("GrenadeCrosshair").GetComponent<RectTransform>();
+                //spritePosition = new CrosshairController.SpritePosition
+                //{
+                //    target = grenadeCrosshair,
+                //    onePosition = new Vector3(0, -48 - 16, 0),
+                //    zeroPosition = new Vector3(0, -48, 0)
+                //};
+                //spritePositions2.Add(spritePosition);
+                spritePositions = spritePositions2.ToArray();
+                //baseMeter = childLocator.FindChild("CenterCharge").GetComponent<Image>();
+                extraPrimaryText = childLocator.FindChild("LeftText").GetComponent<TextMeshProUGUI>();
+                extraSecondaryText = childLocator.FindChild("RightText").GetComponent<TextMeshProUGUI>();
+                //grenadeCharge = childLocator.FindChild("GrenadeCrosshair").GetComponent<Image>();
+                primaryStopwatch = childLocator.FindChild("LeftStick").GetComponent<Image>();
+                secondaryStopwatch = childLocator.FindChild("RightStick").GetComponent<Image>();
+                UpdateHudObject();
+            }
+            if (extraPrimaryText)
+            {
+                if (trackStickies)
+                {
+                    int stocks = trackStickies.stock;
+                    //for (int i = 0; i < primarystockCounter.childCount; i++)
+                    //{
+                    //    primarystockCounter.GetChild(i).gameObject.SetActive(stocks > 0 ? true : false);
+                    //    stocks--;
+                    //}
+                    if (stocks > 0)
+                    {
+                        //extraPrimaryText.gameObject.SetActive(true);
+                        extraPrimaryText.text = stocks.ToString();
+                    }
+                    else
+                    {
+                        //extraPrimaryText.gameObject.SetActive(false);
+                        extraPrimaryText.text = stocks.ToString();
+                    }
+                }
+            }
+            if (inputBank)
+            {
+            }
+            if (skillLocator)
+            {
+                if (extraSecondaryText)
+                {
+                    int stocks = skillLocator.secondary.stock;
+                    //for (int i = 0; i < secondarystockCounter.childCount; i++)
+                    //{
+                    //    secondarystockCounter.GetChild(i).gameObject.SetActive(stocks > 0 ? true : false);
+                    //    stocks--;
+                    //}
+                    if (stocks > 0)
+                    {
+                        //extraSecondaryText.gameObject.SetActive(true);
+                        extraSecondaryText.text = stocks.ToString();
+                    }
+                    else
+                    {
+                        //extraSecondaryText.gameObject.SetActive(false);
+                        extraSecondaryText.text = stocks.ToString();
+                    }
+                }
+                if (primaryStopwatch && trackStickies)
+                {
+                    if (trackStickies.stock >= trackStickies.maxStock)
+                    {
+                        primaryStopwatch.fillAmount = 1;
+                    }
+                    else
+                    {
+                        primaryStopwatch.fillAmount = 1 - ((trackStickies.finalRechargeInterval - trackStickies.rechargeStopwatch) / trackStickies.finalRechargeInterval);
+                    }
+
+                }
+                if (secondaryStopwatch)
+                {
+                    if (skillLocator.secondary.stock >= skillLocator.secondary.maxStock)
+                    {
+                        secondaryStopwatch.fillAmount = 1;
+                    }
+                    else
+                    {
+                        secondaryStopwatch.fillAmount = 1 - ((skillLocator.secondary.finalRechargeInterval - skillLocator.secondary.rechargeStopwatch) / skillLocator.secondary.finalRechargeInterval);
+                    }
+
+                }
+            }
+
+
+            if (stickyText)
+            {
+                stickyText.text = stickyCount.ToString();
+            }
+            if (leftMeter && trackUtility && updateMeter)
+            {
+                if (trackUtility.stock >= trackUtility.maxStock)
+                {
+                    leftMeter.fillAmount = 1;
+                }
+                else
+                {
+                    leftMeter.fillAmount = 1 - ((trackUtility.finalRechargeInterval - trackUtility.rechargeStopwatch) / trackUtility.finalRechargeInterval);
+                }
+
+            }
+
+        }
+        public bool justReleased
+        {
+            get
+            {
+                return !isUtilitydown && wasUtilitydown;
+            }
+        }
+        public bool justPressed
+        {
+            get
+            {
+                return isUtilitydown && !wasUtilitydown;
+            }
+        }
+        public void Update()
+        {
+            if (inputBank && skillLocator)
+            {
+                wasUtilitydown = isUtilitydown;
+                if (inputBank.skill3.down)
+                {
+                    isUtilitydown = true;
+                }
+                else
+                {
+                    isUtilitydown = false;
+                }
+                if (justPressed)
+                {
+                    bool switchOff = false;
+                    if (skillLocator.secondary.skillOverrides.Length > 0)
+                        foreach (var skillOverride in skillLocator.secondary.skillOverrides)
+                        {
+                            if (skillOverride.skillDef == SwapSkillDef && skillOverride.priority == GenericSkill.SkillOverridePriority.Contextual)
+                            {
+                                switchOff = true;
+                                break;
+                            }
+
+                        }
+                    if (!switchOff)
+                    {
+                        secondaryCooldown = skillLocator.secondary.rechargeStopwatch;
+                        secondaryStocks = skillLocator.secondary.stock;
+                        skillLocator.secondary.SetSkillOverride(this, SwapSkillDef, GenericSkill.SkillOverridePriority.Contextual);
+                        primaryReplaceCooldown = skillLocator.special.rechargeStopwatch;
+                        primaryReplaceStocks = skillLocator.special.stock;
+                        skillLocator.special.SetSkillOverride(this, SwapSkillDef, GenericSkill.SkillOverridePriority.Contextual);
+                    }
+
+                }
+                if (justReleased)
+                {
+                    bool switchOff = false;
+                    if (skillLocator.secondary.skillOverrides.Length > 0)
+                        foreach (var skillOverride in skillLocator.secondary.skillOverrides)
+                        {
+                            if (skillOverride.skillDef == SwapSkillDef && skillOverride.priority == GenericSkill.SkillOverridePriority.Contextual)
+                            {
+                                switchOff = true;
+                                break;
+                            }
+
+                        }
+                    if (switchOff)
+                    {
+                        skillLocator.secondary.UnsetSkillOverride(this, SwapSkillDef, GenericSkill.SkillOverridePriority.Contextual);
+                        skillLocator.secondary.stock = secondaryStocks;
+                        skillLocator.secondary.rechargeStopwatch = secondaryCooldown;
+                        skillLocator.special.UnsetSkillOverride(this, SwapSkillDef, GenericSkill.SkillOverridePriority.Contextual);
+                        skillLocator.special.stock = primaryReplaceStocks;
+                        skillLocator.special.rechargeStopwatch = primaryReplaceCooldown;
+                    }
+                    if (canUseUtilityTimer <= 0)
+                    {
+                        if (bodyStateMachine && bodyStateMachine.state.GetType() == bodyStateMachine.mainStateType.stateType)
+                            skillLocator.utility.ExecuteIfReady();
+                    }
+                    canUseUtility = true;
+                    useUtility = false;
+                }
+
+            }
+        }
+    }
+}
 public static class EmoteCompatAbility
 {
     public const string customEmotesApiGUID = "com.weliveinasociety.CustomEmotesAPI";
@@ -8124,7 +8266,7 @@ public static class EmoteCompatAbility
         BoneMapper boneMapper = gameObject.GetComponentInChildren<BoneMapper>();
         if (boneMapper != null)
         {
-            boneMapper.scale += scaleAddition;
+            boneMapper.scale *= scaleAddition;
         }
     }
     private static void CustomEmotesAPI_animChanged(string newAnimation, BoneMapper mapper)
@@ -8242,5 +8384,9 @@ public static class Extensions
         {
             dictionary.Add(key, value);
         }
+    }
+    public static void CheckIfLanded(this CharacterMotor characterMotor)
+    {
+        if (characterMotor.isGrounded) characterMotor.body.SetBuffCount(VelocityPreserve.buffIndex, 0);
     }
 }
