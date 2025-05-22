@@ -2004,7 +2004,7 @@ namespace Demolisher
         {
             public void OnDestroy()
             {
-                transform.localScale /= 1.3f;
+                transform.localScale /= 1.2f;
                 if (emotesEnabled)
                 {
                     EmoteCompatAbility.EmoteCompatabilityModelPartSizeSet(gameObject, 1 / 1.2f);
