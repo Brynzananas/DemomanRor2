@@ -231,11 +231,8 @@ namespace Demolisher
         private void SurvivorIconController_Rebuild(On.RoR2.UI.SurvivorIconController.orig_Rebuild orig, SurvivorIconController self)
         {
             orig(self);
-            LobbyIconMGGEComponent mGEcomponent = GetComponent<LobbyIconMGGEComponent>();
+            LobbyIconMGGEComponent mGEcomponent = self.GetComponent<LobbyIconMGGEComponent>();
             bool destroy = false;
-            if (mGEcomponent != null)
-            {
-            }
             if (self.survivorDef == DemoSurvivorDef)
             {
                 if (mGEcomponent == null) mGEcomponent = self.gameObject.AddComponent<LobbyIconMGGEComponent>();
