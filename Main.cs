@@ -69,7 +69,7 @@ namespace Demolisher
     {
         public const string ModGuid = "com.brynzananas.demolisher";
         public const string ModName = "Demolisher";
-        public const string ModVer = "0.3.0";
+        public const string ModVer = "0.3.1";
 
         private static bool emotesEnabled;
         private static bool loadoutSkillTitlesEnabled;
@@ -1243,7 +1243,7 @@ namespace Demolisher
                 return null;
             }
         }
-        private void Row_AddButton(On.RoR2.UI.LoadoutPanelController.Row.orig_AddButton orig, object self, LoadoutPanelController owner, Sprite icon, string titleToken, string bodyToken, Color tooltipColor, UnityEngine.Events.UnityAction callback, string unlockableName, ViewablesCatalog.Node viewableNode, bool isWIP, int defIndex)
+        private void Row_AddButton(On.RoR2.UI.LoadoutPanelController.Row.orig_AddButton orig, RoR2.UI.LoadoutPanelController.Row self, LoadoutPanelController owner, Sprite icon, string titleToken, string bodyToken, Color tooltipColor, UnityEngine.Events.UnityAction callback, string unlockableName, ViewablesCatalog.Node viewableNode, bool isWIP, int defIndex)
         {
             if (tokenReplace.ContainsKey(bodyToken))
             {
