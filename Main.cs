@@ -69,7 +69,7 @@ namespace Demolisher
     {
         public const string ModGuid = "com.brynzananas.demolisher";
         public const string ModName = "Demolisher";
-        public const string ModVer = "0.3.1";
+        public const string ModVer = "0.3.2";
 
         private static bool emotesEnabled;
         private static bool loadoutSkillTitlesEnabled;
@@ -163,6 +163,7 @@ namespace Demolisher
             On.RoR2.GenericSkill.SetBonusStockFromBody += GenericSkill_SetBonusStockFromBody;
             EntityStates.SurvivorPod.Release.onEnter += Release_onEnter;
             On.EntityStates.SpawnTeleporterState.OnExit += SpawnTeleporterState_OnExit;
+            onClientGameOverEvent += Main_onClientGameOverEvent;
             ContentManager.collectContentPackProviders += (addContentPackProvider) =>
             {
                 addContentPackProvider(new ContentPacks());
@@ -173,7 +174,28 @@ namespace Demolisher
             }
 
         }
-    
+
+        private void Main_onClientGameOverEvent(Run arg1, RunReport arg2)
+        {
+            if (!arg2.gameEnding) return;
+            if (arg2.gameEnding.isWin)
+            {
+
+            }
+            else
+            {
+                foreach (var playerInfo in arg2.playerInfos)
+                {
+                    if (playerInfo.bodyIndex == DemoBodyIndex)
+                    {
+                        if(EnableVoicelines.Value)
+                        Util.PlaySound(DemoGameoverSound.playSoundString, null);
+                        break;
+                    }
+                    
+                }
+            }
+        }
 
         private void SpawnTeleporterState_OnExit(On.EntityStates.SpawnTeleporterState.orig_OnExit orig, SpawnTeleporterState self)
         {
@@ -1468,11 +1490,11 @@ namespace Demolisher
         private void CharacterBody_OnKilledOtherServer(On.RoR2.CharacterBody.orig_OnKilledOtherServer orig, CharacterBody self, DamageReport damageReport)
         {
             CharacterBody victimBody = damageReport.victimBody;
-            Vector3 victimPosition = victimBody.mainHurtBox.transform.position;
+            Vector3 victimPosition = victimBody && victimBody.mainHurtBox ? victimBody.mainHurtBox.transform.position : Vector3.zero;
             bool validForUpgrade = victimBody && (victimBody.isChampion || victimBody.isBoss) ? victimBody.HasBuff(UpgradeOnKill) : false;
             bool victimZatoichi = victimBody ? victimBody.HasBuff(HealOnKill) : false;
             bool attackerZatoichi = self ? self.HasBuff(HealOnKill) : false;
-            if (self.bodyIndex == DemoBodyIndex && self is DemoCharacterBody)
+            if (victimBody && self.bodyIndex == DemoBodyIndex && self is DemoCharacterBody)
             {
                 DemoVoicelinesComponent demoVoicelinesComponent = (self as DemoCharacterBody).demoVoicelinesComponent;
                 demoVoicelinesComponent.RegisterKill(victimBody, damageReport);
@@ -2034,6 +2056,7 @@ namespace Demolisher
         public static DemoSoundClass DemoTackyShootSound = new DemoSoundClass("tacky_grenadier_shoot");
         public static DemoSoundClass DemoTackyShootCritSound = new DemoSoundClass("tacky_grenadier_shoot_crit");
         public static DemoSoundClass DemoRechargedSkillSound = new DemoSoundClass("Recharged");
+        public static DemoSoundClass DemoDrawSwordSound = new DemoSoundClass("draw_sword");
         public static DemoSoundClass OohSound = new DemoSoundClass("ticktockooh");
         public static DemoSoundClass DontFearSound = new DemoSoundClass("dont_fear");
         public static DemoSoundClass NukeExplosionSound = new DemoSoundClass("NukeExplosion");
@@ -2043,12 +2066,14 @@ namespace Demolisher
         public static DemoSoundClass DemoTauntSound = new DemoSoundClass("DemoTaunt");
         public static DemoSoundClass DemoDeathSound = new DemoSoundClass("DemoDeath");
         public static DemoSoundClass DemoLandingSound = new DemoSoundClass("DemoLanding");
-        public static DemoVoiceline DemoKillVoiceline = new DemoVoiceline(DemoKillSound, new DemoVoicelineType[] { DemoVoicelineType.Kill, DemoVoicelineType.TrapKill }, 9);
+        public static DemoSoundClass DemoGameoverSound = new DemoSoundClass("DemoGameover");
+        public static DemoVoiceline DemoKillVoiceline = new DemoVoiceline(DemoKillSound, new DemoVoicelineType[] { DemoVoicelineType.Kill, DemoVoicelineType.TrapKill }, 14);
         public static DemoVoiceline DemoTrapKillVoiceline = new DemoVoiceline(DemoTrapKillSound, new DemoVoicelineType[] { DemoVoicelineType.TrapKill }, 6);
         public static DemoVoiceline DemoLaughterVoiceline = new DemoVoiceline(DemoLaughterSound, new DemoVoicelineType[] { DemoVoicelineType.Kill, DemoVoicelineType.Laugh }, 8);
         public static DemoVoiceline DemoTauntVoiceline = new DemoVoiceline(DemoTauntSound, new DemoVoicelineType[] { DemoVoicelineType.Kill, DemoVoicelineType.TrapKill }, 4);
         public static DemoVoiceline DemoDeathVoiceline = new DemoVoiceline(DemoDeathSound, new DemoVoicelineType[] { DemoVoicelineType.Death }, 5);
         public static DemoVoiceline DemoLandingVoiceline = new DemoVoiceline(DemoLandingSound, new DemoVoicelineType[] { DemoVoicelineType.Landing }, 5);
+        public static DemoVoiceline DemoGameoverVoiceline = new DemoVoiceline(DemoGameoverSound, new DemoVoicelineType[] { DemoVoicelineType.Gameover }, 5);
         private static void CreateSounds()
         {
 
@@ -2109,7 +2134,8 @@ namespace Demolisher
             TrapKill,
             Landing,
             Intro,
-            Death
+            Death,
+            Gameover
         }
         public static void Overheal(HealthComponent toHeal, float healFraction)
         {
@@ -2435,9 +2461,11 @@ namespace Demolisher
         public class SuckSphereComponent : MonoBehaviour
         {
             public float suckPower = 6f;
+            public CharacterBody ownerBody;
             public Dictionary<Collider, CharacterBody> keyValuePairs = new Dictionary<Collider, CharacterBody>();
             public void OnTriggerStay(Collider collider)
             {
+                if (!ownerBody) return;
                 CharacterBody characterBody = null;
                 if (!keyValuePairs.TryGetValue(collider, out characterBody))
                 {
@@ -2445,15 +2473,19 @@ namespace Demolisher
                     keyValuePairs.Add(collider, characterBody);
                 }
                 if (!characterBody) return;
-                Vector3 vector3 = (transform.position - characterBody.corePosition).normalized;
-                if (characterBody.characterMotor)
+                if (ownerBody.teamComponent && characterBody.teamComponent && ownerBody.teamComponent.teamIndex != characterBody.teamComponent.teamIndex)
                 {
-                    characterBody.characterMotor.rootMotion += vector3 * suckPower * Time.fixedDeltaTime;
+                    Vector3 vector3 = (transform.position - characterBody.corePosition).normalized;
+                    if (characterBody.characterMotor)
+                    {
+                        characterBody.characterMotor.rootMotion += vector3 * suckPower * Time.fixedDeltaTime;
+                    }
+                    else if (characterBody.rigidbody)
+                    {
+                        characterBody.rigidbody.AddForce(vector3 * suckPower * Time.fixedDeltaTime, ForceMode.VelocityChange);
+                    }
                 }
-                else if(characterBody.rigidbody)
-                {
-                    characterBody.rigidbody.AddForce(vector3 * suckPower * Time.fixedDeltaTime, ForceMode.VelocityChange);
-                }
+                
             }
         }
         public class HitHelper : MonoBehaviour
@@ -5954,6 +5986,7 @@ namespace Demolisher
                 sphereCollider2.radius = 2;
                 SuckSphereComponent suckSphereComponent = suckSphere.AddComponent<SuckSphereComponent>();
                 suckSphereComponent.suckPower = 18f;
+                suckSphereComponent.ownerBody = characterBody;
                 suckSphere.layer = LayerIndex.collideWithCharacterHullOnly.intVal;
                 suckSphere.transform.SetParent(characterBody.transform, false);
                 suckSphere.transform.position = characterBody.corePosition;
@@ -6240,6 +6273,7 @@ namespace Demolisher
                     bulletAttack2.Fire();
 
                 }
+                characterBody.AddSpreadBloom(3.0f);
                 EffectData effectData = new EffectData
                 {
                     origin = transform.position,
@@ -6476,6 +6510,7 @@ namespace Demolisher
                         SimpleTracer(ray.origin, raycastHit.point, 0.2f, 0.4f);
 
                     }
+                    characterBody.AddSpreadBloom(3.0f);
                     //FireProjectileInfo fireProjectileInfo = new FireProjectileInfo
                     //{
                     //    projectilePrefab = projectile,
@@ -6697,6 +6732,7 @@ namespace Demolisher
                 }
                 SimpleTracer(transform.position, finalPosition);
                 Util.PlaySound(EntityStates.ImpMonster.BlinkState.beginSoundString, base.gameObject);
+                Util.PlaySound(DemoSwordSwingSound.playSoundString, base.gameObject);
             }
             
             public void LeapAuthority()
@@ -6753,6 +6789,7 @@ namespace Demolisher
                     };
                     bulletAttack2.Fire();
                 }
+                characterBody.AddSpreadBloom(.5f);
                 attack = false;
                 new LeapNetMessage(characterBody.netId, finalPosition).Send(NetworkDestination.Clients);
                 TeleportHelper.TeleportBody(characterBody, finalPosition, false);;
@@ -7508,7 +7545,7 @@ namespace Demolisher
                     demoComponent.canUseUtilityTimer = 0.1f;
                     demoComponent.canUseUtility = false;
                     demoComponent.canUseSecondaryTimer = 0.1f;
-                    demoComponent.UpdateHudObject();
+                    demoComponent.Swap();
 
                 }
                 outer.SetNextStateToMain();
@@ -7547,7 +7584,12 @@ namespace Demolisher
                         component.BeginRagdoll(vector);
                     }
                 }
-                demoVoicelinesComponent = GetComponent<DemoVoicelinesComponent>();
+                if (characterBody is DemoCharacterBody)
+                {
+                    DemoCharacterBody demoCharacterBody = characterBody as DemoCharacterBody;
+                    demoVoicelinesComponent = demoCharacterBody.demoVoicelinesComponent;
+                    demoCharacterBody.demoComponent.DetonateAllStickies();
+                }
                 if (isAuthority)
                 {
                     if (demoVoicelinesComponent) demoVoicelinesComponent.PlayDeathAudio();
@@ -7952,15 +7994,29 @@ namespace DemolisherComponents
                 }
             }
         }
+        public void DetonateAllStickies()
+        {
+            foreach (var stickies in stickies)
+            {
+                while (stickies.Value.Count > 0)
+                {
+                    for (int i = 0; i < stickies.Value.Count; i++)
+                    {
+                        stickies.Value[i].DetonateSticky(0);
+                    }
+                }
+            }
+        }
         private void OnOverlayInstanceAdded(OverlayController controller, GameObject @object)
         {
         }
 
-        public void UpdateHudObject()
+        public void Swap()
         {
+            bool isSwapped2 = isSwapped;
             if (hudObject)
             {
-                if (isSwapped)
+                if (isSwapped2)
                 {
                     if (altCrosshair)
                     {
@@ -7986,6 +8042,15 @@ namespace DemolisherComponents
                     rightMeterBase.sprite = SwordIndicator;
                 }
             }
+            if (isSwapped2)
+            {
+                Util.PlaySound(DemoStickyReloadSound.playSoundString, gameObject);
+            }
+            else
+            {
+                Util.PlaySound(DemoDrawSwordSound.playSoundString, gameObject);
+            }
+            characterBody.AddSpreadBloom(0.5f);
         }
         public void LateUpdate()
         {
@@ -8065,7 +8130,7 @@ namespace DemolisherComponents
                 //grenadeCharge = childLocator.FindChild("GrenadeCrosshair").GetComponent<Image>();
                 primaryStopwatch = childLocator.FindChild("LeftStick").GetComponent<Image>();
                 secondaryStopwatch = childLocator.FindChild("RightStick").GetComponent<Image>();
-                UpdateHudObject();
+                Swap();
             }
             if (extraPrimaryText)
             {
