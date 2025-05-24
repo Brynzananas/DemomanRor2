@@ -69,7 +69,7 @@ namespace Demolisher
     {
         public const string ModGuid = "com.brynzananas.demolisher";
         public const string ModName = "Demolisher";
-        public const string ModVer = "0.3.2";
+        public const string ModVer = "0.3.3";
 
         private static bool emotesEnabled;
         private static bool loadoutSkillTitlesEnabled;
@@ -139,8 +139,8 @@ namespace Demolisher
             On.RoR2.CharacterBody.OnKilledOtherServer += CharacterBody_OnKilledOtherServer;
             On.RoR2.HealthComponent.TakeDamageProcess += HealthComponent_TakeDamageProcess;
             On.RoR2.CharacterMotor.FixedUpdate += CharacterMotor_FixedUpdate;
-            On.RoR2.CharacterMotor.OnLanded += CharacterMotor_OnLanded;
-            On.RoR2.CharacterMotor.OnMovementHit += CharacterMotor_OnMovementHit;
+            //On.RoR2.CharacterMotor.OnLanded += CharacterMotor_OnLanded;
+            //On.RoR2.CharacterMotor.OnMovementHit += CharacterMotor_OnMovementHit;
             On.RoR2.CharacterBody.OnBuffFirstStackGained += CharacterBody_OnBuffFirstStackGained;
             On.RoR2.CharacterBody.OnBuffFinalStackLost += CharacterBody_OnBuffFinalStackLost;
             R2API.RecalculateStatsAPI.GetStatCoefficients += RecalculateStatsAPI_GetStatCoefficients;
@@ -164,6 +164,8 @@ namespace Demolisher
             EntityStates.SurvivorPod.Release.onEnter += Release_onEnter;
             On.EntityStates.SpawnTeleporterState.OnExit += SpawnTeleporterState_OnExit;
             onClientGameOverEvent += Main_onClientGameOverEvent;
+            On.RoR2.GlobalEventManager.OnCharacterHitGroundServer += GlobalEventManager_OnCharacterHitGroundServer;
+            //On.EntityStates.SurvivorPod.Descent.OnEnter += Descent_OnEnter;
             ContentManager.collectContentPackProviders += (addContentPackProvider) =>
             {
                 addContentPackProvider(new ContentPacks());
@@ -173,6 +175,63 @@ namespace Demolisher
                 LoadoutSkillTitlesCompatability.AddCompatability();
             }
 
+        }
+
+        private void Descent_OnEnter(On.EntityStates.SurvivorPod.Descent.orig_OnEnter orig, EntityStates.SurvivorPod.Descent self)
+        {
+            orig(self);
+            if (self.characterBody.bodyIndex == DemoBodyIndex && EnableVoicelines.Value) Util.PlaySound(DemoLandingSound.stopSoundString, self.gameObject);
+        }
+
+        private void GlobalEventManager_OnCharacterHitGroundServer(On.RoR2.GlobalEventManager.orig_OnCharacterHitGroundServer orig, GlobalEventManager self, CharacterBody characterBody, CharacterMotor.HitGroundInfo hitGroundInfo)
+        {
+            orig(self, characterBody, hitGroundInfo);
+            if (characterBody)
+            {
+                if (characterBody.HasBuff(VelocityPreserve))
+                {
+                    /*BlastAttack landingExplosion = new BlastAttack
+                    {
+                        attacker = self.gameObject,
+                        attackerFiltering = AttackerFiltering.Default,
+                        baseDamage = characterBody.damage * 3f * (1 + self.lastVelocity.magnitude),
+                        baseForce = 3f,
+                        bonusForce = Vector3.up,
+                        canRejectForce = true,
+                        crit = false,
+                        damageColorIndex = DamageColorIndex.Default,
+                        teamIndex = characterBody.teamComponent.teamIndex,
+                        damageType = DamageTypeCombo.Generic,
+                        falloffModel = BlastAttack.FalloffModel.SweetSpot,
+                        impactEffect = default,
+                        radius = 1 + self.lastVelocity.magnitude,
+                        position = hitPoint + hitNormal * 0.01f,
+                        inflictor = self.gameObject,
+                        losType = BlastAttack.LoSType.None,
+                        procChainMask = default,
+                        procCoefficient = 0f,
+                    };
+                    BlastAttack.Result result = landingExplosion.Fire();
+                    EffectData effectData = new EffectData
+                    {
+                        scale = landingExplosion.radius,
+                        rotation = Quaternion.identity,
+                        origin = hitPoint
+
+                    };
+                    EffectManager.SpawnEffect(explosionVFX, effectData, true);*/
+                    characterBody.SetBuffCount(VelocityPreserve.buffIndex, 0);
+                }
+                if (characterBody.HasBuff(AfterSlam))
+                {
+                    //if (characterBody.GetBuffCount(AfterSlam) > 1)
+                    //{
+                    //    characterBody.RemoveOldestTimedBuff(AfterSlam.buffIndex);
+                    //}
+                    characterBody.SetBuffCount(AfterSlam.buffIndex, 0);
+                }
+            }
+            
         }
 
         private void Main_onClientGameOverEvent(Run arg1, RunReport arg2)
@@ -210,7 +269,7 @@ namespace Demolisher
 
         private void Release_onEnter(EntityStates.SurvivorPod.Release arg1, CharacterBody arg2)
         {
-            if (arg2.bodyIndex == DemoBodyIndex)
+            if (arg2.bodyIndex == DemoBodyIndex && arg1.isAuthority)
             {
                 DemoVoicelinesComponent demoVoicelinesComponent = arg2.GetComponent<DemoVoicelinesComponent>();
                 if(demoVoicelinesComponent) demoVoicelinesComponent.PlayReleaseAudio();
@@ -1282,41 +1341,7 @@ namespace Demolisher
         private void CharacterMotor_OnMovementHit(On.RoR2.CharacterMotor.orig_OnMovementHit orig, CharacterMotor self, Collider hitCollider, Vector3 hitNormal, Vector3 hitPoint, ref HitStabilityReport hitStabilityReport)
         {
             orig(self, hitCollider, hitNormal, hitPoint, ref hitStabilityReport);
-            if (self.body.HasBuff(VelocityPreserve))
-            {
-                CharacterBody characterBody = self.body;
-                /*BlastAttack landingExplosion = new BlastAttack
-                {
-                    attacker = self.gameObject,
-                    attackerFiltering = AttackerFiltering.Default,
-                    baseDamage = characterBody.damage * 3f * (1 + self.lastVelocity.magnitude),
-                    baseForce = 3f,
-                    bonusForce = Vector3.up,
-                    canRejectForce = true,
-                    crit = false,
-                    damageColorIndex = DamageColorIndex.Default,
-                    teamIndex = characterBody.teamComponent.teamIndex,
-                    damageType = DamageTypeCombo.Generic,
-                    falloffModel = BlastAttack.FalloffModel.SweetSpot,
-                    impactEffect = default,
-                    radius = 1 + self.lastVelocity.magnitude,
-                    position = hitPoint + hitNormal * 0.01f,
-                    inflictor = self.gameObject,
-                    losType = BlastAttack.LoSType.None,
-                    procChainMask = default,
-                    procCoefficient = 0f,
-                };
-                BlastAttack.Result result = landingExplosion.Fire();
-                EffectData effectData = new EffectData
-                {
-                    scale = landingExplosion.radius,
-                    rotation = Quaternion.identity,
-                    origin = hitPoint
-
-                };
-                EffectManager.SpawnEffect(explosionVFX, effectData, true);*/
-                self.body.SetBuffCount(VelocityPreserve.buffIndex, 0);
-            }
+            
 
         }
 
@@ -1439,14 +1464,7 @@ namespace Demolisher
         private void CharacterMotor_OnLanded(On.RoR2.CharacterMotor.orig_OnLanded orig, CharacterMotor self)
         {
             orig(self);
-            if (self.body.HasBuff(AfterSlam))
-            {
-                if (self.body.GetBuffCount(AfterSlam) > 1)
-                {
-                    self.body.RemoveOldestTimedBuff(AfterSlam.buffIndex);
-                }
-                self.body.SetBuffCount(AfterSlam.buffIndex, 0);
-            }
+            
 
         }
         private void CharacterMotor_FixedUpdate(On.RoR2.CharacterMotor.orig_FixedUpdate orig, CharacterMotor self)
@@ -4481,7 +4499,7 @@ namespace Demolisher
             private static bool HasTarget([NotNull] GenericSkill skillSlot)
             {
                 CharacterMotor characterMotor = ((InstanceData)skillSlot.skillInstanceData).characterMotor;
-                return characterMotor ? characterMotor.isGrounded : true;
+                return characterMotor ? !characterMotor.isGrounded : true;
             }
             public override bool CanExecute([NotNull] GenericSkill skillSlot)
             {
@@ -7439,7 +7457,7 @@ namespace Demolisher
                         characterMotor.Motor.ForceUnground(0f);
                     characterMotor.velocity.y = height + 5f;
                     characterBody.AddBuffAuthotiry(AfterSlam);
-                    characterBody.AddTimedBuffAuthotiry(AfterSlam, 1, 0.5f);
+                    //characterBody.AddTimedBuffAuthotiry(AfterSlam, 1, 0.5f);
                     if (isAuthority)
                         outer.SetNextStateToMain();
                 }
@@ -7689,23 +7707,37 @@ namespace Demolisher
         [RegisterAchievement("DEMOLISHER_MASTERY_UNLOCK", "DemoMasteryUnlock", null, 10)]
         public class NuclearSkinAchievement : DemoMasteryUnlockable
         {
-            public override string characterName => "DemoBody";
+            public override string characterName => "DemolisherBody";
 
             public override float difficulty => 3f;
+            public override bool CustomCondition(Run run, RunReport runReport)
+            {
+                return base.CustomCondition(run, runReport);
+            }
         }
         public abstract class DemoMasteryUnlockable : BaseAchievement
         {
             public abstract string characterName { get; }
             public abstract float difficulty { get; }
+            public override void OnBodyRequirementMet()
+            {
+                onClientGameOverEvent += OnClientGameOverGlobal;
+                base.OnBodyRequirementMet();
+            }
+            public override void OnBodyRequirementBroken()
+            {
+                base.OnBodyRequirementBroken();
+                onClientGameOverEvent -= OnClientGameOverGlobal;
+            }
             public override void OnInstall()
             {
                 base.OnInstall();
-                onClientGameOverEvent += OnClientGameOverGlobal;
+                
             }
             public override void OnUninstall()
             {
                 base.OnUninstall();
-                onClientGameOverEvent -= OnClientGameOverGlobal;
+                
             }
             //public override void OnBodyRequirementMet()
             //{
