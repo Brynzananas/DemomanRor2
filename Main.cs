@@ -56,6 +56,7 @@ namespace Demolisher
 {
     [BepInPlugin(ModGuid, ModName, ModVer)]
     [BepInDependency(R2API.R2API.PluginGUID, R2API.R2API.PluginVersion)]
+    [BepInDependency(R2API.SkillsAPI.PluginGUID, SkillsAPI.PluginVersion)]
     [BepInDependency(R2API.Networking.NetworkingAPI.PluginGUID)]
     [BepInDependency(BodyModelAdditionsAPI.Main.ModGuid, BepInDependency.DependencyFlags.HardDependency)]
     [BepInDependency(NetworkConfigs.Main.ModGuid, BepInDependency.DependencyFlags.HardDependency)]
@@ -69,7 +70,7 @@ namespace Demolisher
     {
         public const string ModGuid = "com.brynzananas.demolisher";
         public const string ModName = "Demolisher";
-        public const string ModVer = "0.3.3";
+        public const string ModVer = "0.3.4";
 
         private static bool emotesEnabled;
         private static bool loadoutSkillTitlesEnabled;
@@ -160,7 +161,7 @@ namespace Demolisher
             //On.RoR2.PlayerCharacterMasterController.PollButtonInput += PlayerCharacterMasterController_PollButtonInput;
             //On.RoR2.UI.LogBook.PageBuilder.AddBodyLore += PageBuilder_AddBodyLore;
             Run.onClientGameOverGlobal += Run_onClientGameOverGlobal;
-            On.RoR2.GenericSkill.SetBonusStockFromBody += GenericSkill_SetBonusStockFromBody;
+            //On.RoR2.GenericSkill.SetBonusStockFromBody += GenericSkill_SetBonusStockFromBody;
             EntityStates.SurvivorPod.Release.onEnter += Release_onEnter;
             On.EntityStates.SpawnTeleporterState.OnExit += SpawnTeleporterState_OnExit;
             onClientGameOverEvent += Main_onClientGameOverEvent;
@@ -278,6 +279,7 @@ namespace Demolisher
 
         private void GenericSkill_SetBonusStockFromBody(On.RoR2.GenericSkill.orig_SetBonusStockFromBody orig, GenericSkill self, int newBonusStockFromBody)
         {
+            
             int bonus = 1;
             if(self.skillDef != null)
             if (skillsBonusStocksMultiplier.ContainsKey(self.skillDef)) bonus = skillsBonusStocksMultiplier[self.skillDef];
@@ -316,11 +318,12 @@ namespace Demolisher
             bool destroy = false;
             if (self.survivorDef == DemoSurvivorDef)
             {
-                if (mGEcomponent == null) mGEcomponent = self.gameObject.AddComponent<LobbyIconMGGEComponent>();
+                    if (mGEcomponent == null) mGEcomponent = self.gameObject.GetOrAddComponent<LobbyIconMGGEComponent>();
                 HGButton hGButton = self.GetComponent<HGButton>();
                 hGButton.onClick.AddListener(MGE);
                 void MGE()
                 {
+                    if (self.survivorDef == DemoSurvivorDef)
                     mGEcomponent.time ++;
                     if (mGEcomponent.time >= mGEcomponent.maxTimes)
                     {
@@ -4335,9 +4338,10 @@ namespace Demolisher
         public static T AddSkill<T>(Type state, string activationState, Sprite sprite, string name, string nameToken, string descToken, string[] keywordTokens, int maxStocks, float rechargeInterval, bool beginSkillCooldownOnSkillEnd, bool canceledFromSprinting, bool cancelSprinting, bool fullRestockOnAssign, InterruptPriority interruptPriority, bool isCombat, bool mustKeyPress, int requiredStock, int rechargeStock, int stockToConsume, SkillFamily skillFamily, bool resetCooldownTimerOnUse = false) where T : SkillDef
         {
             GameObject commandoBodyPrefab = Main.DemoBody;
-
+            
             SkillDef mySkillDef = ScriptableObject.CreateInstance<T>();
-            skillsBonusStocksMultiplier.Add(mySkillDef, maxStocks);
+            mySkillDef.SetBonusStockMultiplier(maxStocks);
+            //skillsBonusStocksMultiplier.Add(mySkillDef, maxStocks);
             mySkillDef.activationState = new SerializableEntityStateType(state);
             mySkillDef.activationStateMachineName = activationState;
             mySkillDef.baseMaxStock = maxStocks;
@@ -4360,12 +4364,8 @@ namespace Demolisher
             mySkillDef.resetCooldownTimerOnUse = resetCooldownTimerOnUse;
             (mySkillDef as ScriptableObject).name = name;
             skills.Add(mySkillDef);
-            //ContentAddition.AddSkillDef(mySkillDef);
-            //SkillLocator skillLocator = commandoBodyPrefab.GetComponent<SkillLocator>();
-            //SkillFamily skillFamily = skillLocator.primary.skillFamily;
             if (skillFamily)
                 AddSkillToFamily(ref skillFamily, mySkillDef);
-            //swordDictionary.Add(mySkillDef, demoSword);
             return mySkillDef as T;
         }
         public static SkillDef SwordInit(DemoSwordClass demoSword, Type state, Sprite sprite, string name, string nameToken, string descToken, string[] keyWords, int requiredStock = 0, int rechargeStock = 1, int stockToConsume = 0, float rechargeInterval = 0f, int baseStock = 1)
@@ -6012,10 +6012,12 @@ namespace Demolisher
                 suckVFXclone = GameObject.Instantiate(SuckEffect);
                 suckVFXclone.transform.localScale = OneVector(18f);
                 suckVFXclone.transform.position = characterBody.corePosition;
+                Util.PlaySound("Play_halcyonite_skill3_loop", base.gameObject);
             }
             public override void OnExit()
             {
                 base.OnExit();
+                Util.PlaySound("Stop_halcyonite_skill3_loop", base.gameObject);
                 if (NetworkServer.active)
                     characterBody.RemoveBuff(RoR2Content.Buffs.SmallArmorBoost);
                 if (suckSphere) Destroy(suckSphere);
