@@ -60,7 +60,6 @@ namespace Demolisher
     [BepInDependency(R2API.Networking.NetworkingAPI.PluginGUID)]
     [BepInDependency(BodyModelAdditionsAPI.Main.ModGuid, BepInDependency.DependencyFlags.HardDependency)]
     [BepInDependency(NetworkConfigs.Main.ModGuid, BepInDependency.DependencyFlags.HardDependency)]
-    [BepInDependency(LoadoutSkillTitlesCompatability.loadoutSKillTitlesGUID, BepInDependency.DependencyFlags.SoftDependency)]
     [BepInDependency(EmoteCompatAbility.customEmotesApiGUID, BepInDependency.DependencyFlags.SoftDependency)]
     [BepInDependency(RiskOfOptionsCompatability.riskOfOptionsGUID, BepInDependency.DependencyFlags.SoftDependency)]
     [NetworkCompatibility(CompatibilityLevel.EveryoneMustHaveMod, VersionStrictness.EveryoneNeedSameModVersion)]
@@ -171,10 +170,6 @@ namespace Demolisher
             {
                 addContentPackProvider(new ContentPacks());
             };
-            if (loadoutSkillTitlesEnabled)
-            {
-                LoadoutSkillTitlesCompatability.AddCompatability();
-            }
 
         }
 
@@ -4320,7 +4315,15 @@ namespace Demolisher
             InitProjectiles();
             InitWeaponModels();
             InitStates();
-            
+            GenericSkill[] genericSkills = DemoBody.GetComponents<GenericSkill>();
+            int i = 0;
+            foreach (GenericSkill skill in genericSkills)
+            {
+                if (i == 2) skill.SetLoadoutTitleTokenOverride("LOADOUT_SKILL_PRIMARY");
+                if (i == 5) skill.SetLoadoutTitleTokenOverride("LOADOUT_SKILL_UTILITY");
+                if (i == 5) skill.SetHideInLoadout(true);
+                i++;
+            }
         }
 
 
