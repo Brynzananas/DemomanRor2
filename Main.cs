@@ -69,7 +69,7 @@ namespace Demolisher
     {
         public const string ModGuid = "com.brynzananas.demolisher";
         public const string ModName = "Demolisher";
-        public const string ModVer = "0.3.4";
+        public const string ModVer = "0.3.5";
 
         private static bool emotesEnabled;
         private static bool loadoutSkillTitlesEnabled;
@@ -125,7 +125,6 @@ namespace Demolisher
                 unlockableDefs.Add(unlockableDef);
             }
             emotesEnabled = BepInEx.Bootstrap.Chainloader.PluginInfos.ContainsKey(EmoteCompatAbility.customEmotesApiGUID);
-            loadoutSkillTitlesEnabled = BepInEx.Bootstrap.Chainloader.PluginInfos.ContainsKey(LoadoutSkillTitlesCompatability.loadoutSKillTitlesGUID);
             riskOfOptionsEnabled = BepInEx.Bootstrap.Chainloader.PluginInfos.ContainsKey(RiskOfOptionsCompatability.riskOfOptionsGUID);
             //CreateGmodAssets();
             CreateConfigs();
@@ -309,34 +308,37 @@ namespace Demolisher
         private void SurvivorIconController_Rebuild(On.RoR2.UI.SurvivorIconController.orig_Rebuild orig, SurvivorIconController self)
         {
             orig(self);
-            LobbyIconMGGEComponent mGEcomponent = self.GetComponent<LobbyIconMGGEComponent>();
-            bool destroy = false;
             if (self.survivorDef == DemoSurvivorDef)
             {
-                    if (mGEcomponent == null) mGEcomponent = self.gameObject.GetOrAddComponent<LobbyIconMGGEComponent>();
+                LobbyJumpscare lobbyJumpscare = self.gameObject.GetOrAddComponent<LobbyJumpscare>();
                 HGButton hGButton = self.GetComponent<HGButton>();
-                hGButton.onClick.AddListener(MGE);
-                void MGE()
+                lobbyJumpscare.InitJumpscare(hGButton, self.survivorDef);
+            }
+        }
+        public class LobbyJumpscare : MonoBehaviour
+        {
+            public HGButton hGButton;
+            public SurvivorDef survivorDef;
+            public bool init = false;
+            public void InitJumpscare(HGButton hGButton, SurvivorDef survivorDef)
+            {
+                this.hGButton = hGButton;
+                this.survivorDef = survivorDef;
+                if (init) return;
+                init = true;
+                if(this.hGButton)
+                    this.hGButton.onClick.AddListener(Jumpscare);
+            }
+            public void Jumpscare()
+            {
+                if (survivorDef == DemoSurvivorDef)
+                    time++;
+                if (time >= maxTimes)
                 {
-                    if (self.survivorDef == DemoSurvivorDef)
-                    mGEcomponent.time ++;
-                    if (mGEcomponent.time >= mGEcomponent.maxTimes)
-                    {
-                        new InstantiateObjectNetMessage(objectToId[MGEEasterEgg], Vector3.zero, Vector3.zero, Vector3.one).Send(NetworkDestination.Clients);
-                        mGEcomponent.time = 0;
-                        //mGEcomponent.maxTimes =(int)(mGEcomponent.maxTimes * 1.5f);
-                    }
-                    
+                    new InstantiateObjectNetMessage(objectToId[MGEEasterEgg], Vector3.zero, Vector3.zero, Vector3.one).Send(NetworkDestination.Clients);
+                    time = 0;
                 }
             }
-            else if(mGEcomponent != null)
-            {
-                destroy = true;
-            }
-            if (destroy) Destroy(mGEcomponent);
-        }
-        public class LobbyIconMGGEComponent : MonoBehaviour
-        {
             public int time = 0;
             public int maxTimes = 10;
 
@@ -4367,6 +4369,30 @@ namespace Demolisher
             mySkillDef.resetCooldownTimerOnUse = resetCooldownTimerOnUse;
             (mySkillDef as ScriptableObject).name = name;
             skills.Add(mySkillDef);
+            string[] strings = ["DemoDetonate", "DemoSwap"];
+            if(!strings.Contains(name))
+            {
+                CreateConfig<int>(Main.ConfigFile, objectsActualNames[name], StocksName, maxStocks, "", ApplyStocks);
+                CreateConfig<float>(Main.ConfigFile, objectsActualNames[name], ReloadTimeName, rechargeInterval, "", ApplyReloadTime);
+                CreateConfig<int>(Main.ConfigFile, objectsActualNames[name], StocksToConsume, stockToConsume, "", ApplyStocksToConsume);
+                CreateConfig<int>(Main.ConfigFile, objectsActualNames[name], StocksToReloadName, rechargeStock, "", ApplyStocksToReload);
+                void ApplyStocks(int id, INetworkConfig networkConfig)
+                {
+                    mySkillDef.baseMaxStock = (networkConfig as NetworkConfig<int>).Value;
+                }
+                void ApplyReloadTime(int id, INetworkConfig networkConfig)
+                {
+                    mySkillDef.baseRechargeInterval = (networkConfig as NetworkConfig<float>).Value;
+                }
+                void ApplyStocksToConsume(int id, INetworkConfig networkConfig)
+                {
+                    mySkillDef.stockToConsume = (networkConfig as NetworkConfig<int>).Value;
+                }
+                void ApplyStocksToReload(int id, INetworkConfig networkConfig)
+                {
+                    mySkillDef.rechargeStock = (networkConfig as NetworkConfig<int>).Value;
+                }
+            }
             if (skillFamily)
                 AddSkillToFamily(ref skillFamily, mySkillDef);
             return mySkillDef as T;
@@ -4392,26 +4418,6 @@ namespace Demolisher
         public static T GrenadeLauncherInit<T>(Type state, Sprite sprite, string name, string nameToken, string descToken, string[] keyWordTokens, bool isSticky = false, int baseStocks = 4, float rechargeInterval = 4f, int requiredStock = 1, int rechargeStock = 1, int stockToConsume = 1) where T : SkillDef
         {
             T skillDef = AddSkill<T>(state, isSticky ? "Weapon" : "Weapon2", sprite, name, nameToken, descToken, keyWordTokens, baseStocks, rechargeInterval, true, false, false, true, InterruptPriority.Any, true, false, requiredStock, rechargeStock, stockToConsume, isSticky ? demoStickyFamily : demoSecondaryFamily, true);
-            CreateConfig<int>(Main.ConfigFile, objectsActualNames[name], StocksName, baseStocks, "", ApplyStocks);
-            CreateConfig<float>(Main.ConfigFile, objectsActualNames[name], ReloadTimeName, rechargeInterval, "", ApplyReloadTime);
-            CreateConfig<int>(Main.ConfigFile, objectsActualNames[name], StocksToConsume, stockToConsume, "", ApplyStocksToConsume);
-            CreateConfig<int>(Main.ConfigFile, objectsActualNames[name], StocksToReloadName, rechargeStock, "", ApplyStocksToReload);
-            void ApplyStocks(int id, INetworkConfig networkConfig)
-            {
-                skillDef.baseMaxStock = (networkConfig as NetworkConfig<int>).Value;
-            }
-            void ApplyReloadTime(int id, INetworkConfig networkConfig)
-            {
-                skillDef.baseRechargeInterval = (networkConfig as NetworkConfig<float>).Value;
-            }
-            void ApplyStocksToConsume(int id, INetworkConfig networkConfig)
-            {
-                skillDef.stockToConsume = (networkConfig as NetworkConfig<int>).Value;
-            }
-            void ApplyStocksToReload(int id, INetworkConfig networkConfig)
-            {
-                skillDef.rechargeStock = (networkConfig as NetworkConfig<int>).Value;
-            }
             if (isSticky) Main.StickySkills.Add(skillDef);
             return skillDef;
         }
@@ -5069,10 +5075,11 @@ namespace Demolisher
                 if (base.characterMotor)
                 {
 
-                    savedMoveVector = transform.position - previousMoveVector;
-                    previousMoveVector = transform.position;
-                    base.characterMotor.rootMotion += chargeVector * moveSpeedStat * chargeSpeed * GetDeltaTime();
-
+                    //savedMoveVector = transform.position - previousMoveVector;
+                    //previousMoveVector = transform.position;
+                    float y = characterMotor.velocity.y;
+                    base.characterMotor.velocity = chargeVector * moveSpeedStat * chargeSpeed;// * GetDeltaTime();
+                    characterMotor.velocity.y = y;
                 }
                 RaycastHit hit;
                 Ray ray = new Ray
@@ -5215,12 +5222,12 @@ namespace Demolisher
             }
             public virtual void OnExitGlobal()
             {
-                if (characterMotor)
-                {
-                    characterMotor.velocity.y = 0f;
-                    characterMotor.velocity += savedMoveVector / Time.fixedDeltaTime;
-                    characterMotor.disableAirControlUntilCollision = true;
-                }
+                //if (characterMotor)
+                //{
+                //    characterMotor.velocity.y = 0f;
+                //    characterMotor.velocity += savedMoveVector / Time.fixedDeltaTime;
+                //    characterMotor.disableAirControlUntilCollision = true;
+                //}
                 if (NetworkServer.active)
                 {
                     int buffCount = characterBody.GetBuffCount(buffOnCharge);
@@ -7571,6 +7578,7 @@ namespace Demolisher
                     demoComponent.Swap();
 
                 }
+                if(isAuthority)
                 outer.SetNextStateToMain();
             }
             public override void OnExit()
@@ -7581,7 +7589,7 @@ namespace Demolisher
             }
             public override InterruptPriority GetMinimumInterruptPriority()
             {
-                return InterruptPriority.Skill;
+                return InterruptPriority.Any;
             }
         }
         public class DemoDeathState : GenericCharacterDeath
@@ -7939,7 +7947,7 @@ namespace DemolisherComponents
         {
             get
             {
-                if (skillLocator && stickySkills.Contains(skillLocator.primary.baseSkill))
+                if (skillLocator && skillLocator.primary && trackStickies && trackStickies == skillLocator.primary)
                 {
                     return true;
                 }
@@ -8412,15 +8420,6 @@ public static class EmoteCompatAbility
     public class DemoEmotesComponent : MonoBehaviour
     {
         public List<ParticleSystem.MainModule> customSpaceParticles = new List<ParticleSystem.MainModule>();
-    }
-}
-public static class LoadoutSkillTitlesCompatability
-{
-    public const string loadoutSKillTitlesGUID = "com.TheTimeSweeper.LoadoutSkillTitles";
-    public static void AddCompatability()
-    {
-        LoadoutSkillTitles.LoadoutSkillTitlesPlugin.AddTitleToken("DemolisherBody", 2, "LOADOUT_SKILL_PRIMARY");
-        LoadoutSkillTitles.LoadoutSkillTitlesPlugin.AddTitleToken("DemolisherBody", 5, "LOADOUT_SKILL_UTILITY");
     }
 }
 public static class RiskOfOptionsCompatability
